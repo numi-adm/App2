@@ -18,11 +18,9 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Set up Android SDK & NDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install NDK and CMake
+      - name: Install Android SDK, NDK and CMake
         run: |
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
           yes | sdkmanager --licenses > /dev/null || true
           sdkmanager "platforms;android-34" "build-tools;34.0.0" "cmake;3.22.1" "ndk;26.1.10909125"
 
@@ -34,9 +32,9 @@ jobs:
       - name: Build Debug APK
         run: |
           if [ -f "settings.gradle" ]; then
-            gradle assembleDebug --no-daemon
+            gradle assembleDebug --no-daemon --stacktrace
           elif [ -f "mobile_c_app/settings.gradle" ]; then
-            cd mobile_c_app && gradle assembleDebug --no-daemon
+            cd mobile_c_app && gradle assembleDebug --no-daemon --stacktrace
           fi
 
       - name: Upload APK Artifact
