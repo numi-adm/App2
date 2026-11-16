@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Roblox Account Dashboard</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#1e1e1e;color:#eee;margin:0;padding:12px}
+h1{font-size:18px;margin:4px 0 10px 0;display:flex;align-items:center;justify-content:space-between}
+.bar{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0;align-items:center;background:#262626;padding:10px;border-radius:10px}
+button{background:#2d7ff9;border:none;color:#fff;padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500}
+button:active{opacity:0.8;transform:scale(0.98)}
+button.ghost{background:#444}
+button.danger{background:#a02828}
+button:disabled{background:#555;cursor:default}
+input,select,textarea{background:#2a2a2a;color:#eee;border:1px solid #555;border-radius:8px;padding:8px 10px;font-size:13px}
+.table-wrap{width:100%;overflow-x:auto;background:#242424;border-radius:10px;border:1px solid #333}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:520px}
+th,td{border-bottom:1px solid #333;padding:10px 8px;text-align:left;vertical-align:top}
+th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
+.badge{padding:3px 10px;border-radius:10px;font-size:11px;white-space:nowrap;display:inline-block;font-weight:600}
+.WORK{background:#1d7a34}.BAN{background:#a02020}.CAPTCHA,.VERIFY{background:#a06a00}
+.BADPASS{background:#7a1f4e}.RATE,.TWOFA{background:#5a3fa0}
+.UNKNOWN,.ERROR{background:#555}.SKIP{background:#444}
+.mono{font-family:monospace;font-size:12px;word-break:break-all;max-width:240px}
+.note{color:#aaa;font-size:11px;line-height:1.45;display:block;margin-top:3px}
+.row-actions{display:flex;gap:6px;flex-wrap:wrap}
+.row-actions button{padding:6px 10px;font-size:12px}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#2d7ff9;color:#fff;padding:8px 16px;border-radius:20px;font-size:13px;box-shadow:0 4px 14px rgba(0,0,0,.45);display:none;z-index:999}
+@media (max-width:600px){
+  .imp-group{width:100%;display:flex;gap:6px}
+  .imp-group input{flex:1;min-width:0}
+}
+</style>
+</head>
+<body>
+<h1>
+  <span>Roblox Account Dashboard (<span id="count">0</span>)</span>
+  <span id="lstat" class="note" style="margin:0"></span>
+</h1>
+
+<div class="bar">
+  <button onclick="openSel()">เปิดที่เลือก</button>
+  <button onclick="manualOpen()">เปิดหน้าต่างเอง</button>
+  <button onclick="dumpSel()">ดึง cookie ที่เลือก</button>
+  <button onclick="grabLive()">ดึง cookie จากหน้าต่างที่เปิด</button>
+  <button onclick="delSel()" class="ghost danger">ลบที่เลือก</button>
+  <button onclick="closeAll()" class="ghost">ปิดเบราว์เซอร์ทั้งหมด</button>
+  <label style="font-size:12px;color:#ccc;display:flex;align-items:center;gap:4px">
+    <input id="incog" type="checkbox" checked> ล้างเซสชันก่อนเปิด (Incognito)
+  </label>
+  <span id="dlog" class="note" style="width:100%"></span>
+</div>
+
+<div class="bar">
+  <div class="imp-group">
+    <input id="imp" placeholder="วาง ชื่อ:รหัส หรือ cookie" style="width:260px">
+    <button onclick="importC()">นำเข้า</button>
+  </div>
+  <div class="imp-group">
+    <input id="au" placeholder="username" style="width:115px">
+    <input id="ap" placeholder="password" style="width:115px">
+    <button onclick="addAcc()">เพิ่มไอดี</button>
+  </div>
+</div>
+
+<div class="note" style="margin-bottom:10px;background:#252525;padding:10px;border-radius:8px">
+  • ไอดีที่ติด <b>Verify you're human</b> → หน้าต่าง Roblox ในแอปจะเปิดค้างไว้ให้กด <b>Press and hold</b> เอง แล้วกด <b>ดึง cookie จากหน้าต่างที่เปิด</b> · <b>ห้ามกด Logout</b><br>
+  • <b>ดึง cookie</b> = ล้าง cookie + cache เดิม แล้วเข้าหน้า <b>roblox.com/login</b> กรอกชื่อ+รหัสให้อัตโนมัติผ่านเอนจินภาษา C<br>
+  • <b>เปิดเอง</b> = เปิดหน้าเว็บ Roblox ให้ล็อกอินด้วยตัวเอง แล้วกดดึง cookie เก็บเข้าไอดีนั้นได้ทันที
+</div>
+
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th><input type="checkbox" onclick="selAll(this)"></th>
+      <th>#</th>
+      <th>ชื่อ:รหัส</th>
+      <th>cookie (ดึงจากล็อกอิน)</th>
+      <th>สร้าง / เช็คล่าสุด</th>
+      <th>สถานะ</th>
+      <th>จัดการ</th>
+    </tr>
+  </thead>
+  <tbody id="tb"></tbody>
+</table>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+let rows = [];
+const $ = id => document.getElementById(id);
+const isNative = typeof window.NativeApp !== 'undefined';
+
+function toast(msg) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.style.display = 'block';
+  clearTimeout(window._tTimer);
+  window._tTimer = setTimeout(() => { el.style.display = 'none'; }, 2400);
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+async function api(p, d) {
+  if (isNative) {
+    return nativeDispatch(p, d);
+  }
+  const r = await fetch(p, {
+    method: d ? 'POST' : 'GET',
+    headers: {'Content-Type': 'application/json'},
+    body: d ? JSON.stringify(d) : undefined
+  });
+  return r.json();
+}
+
+function nativeDispatch(path, data) {
+  try {
+    if (path === '/api/accounts') {
+      return JSON.parse(window.NativeApp.getAccountsJson() || '[]');
+    }
+    if (path === '/api/live') {
+      return JSON.parse(window.NativeApp.getLiveStatus() || '{"open":[],"manual":[]}');
+    }
+    if (path === '/api/add') {
+      window.NativeApp.addAccount(data.username || '', data.password || '');
+      return {ok: true};
+    }
+    if (path === '/api/import') {
+      const added = window.NativeApp.importText(data.text || '');
+      return {ok: true, added: added};
+    }
+    if (path === '/api/delete') {
+      window.NativeApp.deleteIndices(JSON.stringify(data.indices || []));
+      return {ok: true};
+    }
+    if (path === '/api/open') {
+      const idx = (data.indices && data.indices.length) ? data.indices[0] : -1;
+      window.NativeApp.openAccount(idx, !!data.incognito);
+      return {ok: true, opened: idx >= 0 ? [idx] : [], failed: []};
+    }
+    if (path === '/api/manual_open') {
+      const idx = (typeof data.index === 'number') ? data.index : -1;
+      window.NativeApp.manualOpen(idx, !!($('incog') && $('incog').checked));
+      return {ok: true, port: 'WebView'};
+    }
+    if (path === '/api/dump') {
+      const idx = (data.indices && data.indices.length) ? data.indices[0] : -1;
+      window.NativeApp.dumpCookie(idx);
+      return {ok: true, job: 'native'};
+    }
+    if (path === '/api/grab') {
+      const got = window.NativeApp.grabLiveCookie();
+      return {ok: true, got: got, open: [1], manual: []};
+    }
+    if (path === '/api/close') {
+      window.NativeApp.closeBrowser();
+      return {ok: true};
+    }
+  } catch (e) {
+    console.error(e);
+    return {ok: false, error: String(e)};
+  }
+  return {ok: true};
+}
+
+function cp(t) {
+  if (isNative && window.NativeApp.copyText) {
+    window.NativeApp.copyText(t);
+    toast('คัดลอกลงคลิปบอร์ดแล้ว');
+    return;
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(t).then(() => toast('คัดลอกแล้ว'));
+  }
+}
+
+const OKST = ['WORK','BAN','CAPTCHA','VERIFY','BADPASS','RATE','2FA','UNKNOWN','ERROR','SKIP'];
+function badge(s) {
+  let c = OKST.includes(s) ? s : 'UNKNOWN';
+  if (c === '2FA') c = 'TWOFA';
+  return `<span class="badge ${c}">${esc(s)}</span>`;
+}
+
+function selAll(c) {
+  document.querySelectorAll('.sel').forEach(x => x.checked = c.checked);
+}
+
+function selIdx() {
+  return [...document.querySelectorAll('.sel')].map((x, i) => x.checked ? i : -1).filter(i => i >= 0);
+}
+
+async function load() {
+  const j = await api('/api/accounts');
+  rows = Array.isArray(j) ? j : [];
+  $('count').textContent = rows.length;
+  try {
+    const lv = await api('/api/live');
+    if ($('lstat')) {
+      const openCnt = (lv.open || []).length + (lv.manual || []).length;
+      $('lstat').textContent = openCnt ? ('หน้าต่างเปิดอยู่ ' + openCnt) : 'พร้อมใช้งาน (C Core)';
+    }
+  } catch (e) {}
+
+  const tb = $('tb');
+  tb.innerHTML = '';
+  rows.forEach((r, i) => {
+    const tr = document.createElement('tr');
+    const idpw = (r.username || '') + ':' + (r.password || '');
+    const ck = r.cookie || '';
+    tr.innerHTML = `
+      <td><input type="checkbox" class="sel"></td>
+      <td>${i + 1}</td>
+      <td class="mono">
+        ${r.username ? esc(idpw) : '<span class="note">(ไม่มีชื่อ/รหัส)</span>'}
+        ${r.username ? `<div style="margin-top:4px"><button class="ghost" style="padding:4px 8px;font-size:11px" data-cp="${esc(idpw)}">ก๊อป</button></div>` : ''}
+      </td>
+      <td class="mono">
+        ${ck ? esc(ck.slice(0, 32)) + '… <div style="margin-top:4px"><button class="ghost" style="padding:4px 8px;font-size:11px" data-cp="' + esc(ck) + '">ก๊อป cookie</button></div>' : '<span class="note">ยังไม่มี — กด "ดึง cookie"</span>'}
+      </td>
+      <td>${esc(r.created || '-')}<br><small style="color:#888">${esc(r.checked || '')}</small></td>
+      <td>${badge(r.status || 'UNKNOWN')}${r.note ? `<span class="note">${esc(r.note)}</span>` : ''}</td>
+      <td>
+        <div class="row-actions">
+          <button onclick="one(${i},'open')">เปิด</button>
+          <button onclick="manualOpen(${i})">เปิดเอง</button>
+          <button onclick="dumpOne(${i})">ดึง cookie</button>
+        </div>
+      </td>`;
+    tb.appendChild(tr);
+  });
+  tb.querySelectorAll('[data-cp]').forEach(b => b.onclick = () => cp(b.getAttribute('data-cp')));
+}
+
+async function one(i, act) {
+  await api('/api/open', {indices: [i], incognito: $('incog').checked});
+  load();
+}
+
+async function openSel() {
+  const i = selIdx();
+  if (!i.length) return alert('เลือกไอดีก่อน');
+  await api('/api/open', {indices: i, incognito: $('incog').checked});
+  load();
+}
+
+async function closeAll() {
+  await api('/api/close', {});
+  $('dlog').textContent = 'ปิดหน้าต่างเบราว์เซอร์แล้ว';
+  load();
+}
+
+async function grabLive() {
+  const j = await api('/api/grab', {});
+  const got = j.got || 0;
+  if (got > 0) {
+    $('dlog').textContent = 'ดึง cookie สำเร็จ ' + got + ' ไอดี';
+    toast('ดึง cookie สำเร็จ!');
+    load();
+  } else {
+    $('dlog').textContent = 'ยังไม่พบ cookie .ROBLOSECURITY (ล็อกอินหรือกด Press and hold ให้ผ่านก่อน)';
+    alert('ยังไม่มี cookie\nกรุณาล็อกอินหรือกดยืนยัน Press and hold ในหน้าต่างให้เสร็จก่อน');
+  }
+}
+
+async function manualOpen(i) {
+  const d = {};
+  if (typeof i === 'number') d.index = i;
+  const j = await api('/api/manual_open', d);
+  if (j && j.ok === false) return alert('เปิดไม่ได้: ' + j.error);
+  $('dlog').textContent = 'เปิดหน้าต่าง Roblox แล้ว — ล็อกอินเสร็จแล้วกด "ดึง cookie จากหน้าต่างที่เปิด"';
+  load();
+}
+
+async function delSel() {
+  const i = selIdx();
+  if (!i.length) return alert('เลือกไอดีก่อน');
+  if (!confirm('ลบ ' + i.length + ' ไอดี?')) return;
+  await api('/api/delete', {indices: i});
+  load();
+}
+
+async function addAcc() {
+  const u = $('au').value.trim();
+  const p = $('ap').value.trim();
+  if (!u) return alert('ใส่ username ก่อน');
+  await api('/api/add', {username: u, password: p});
+  $('au').value = $('ap').value = '';
+  load();
+}
+
+async function importC() {
+  const txt = $('imp').value.trim();
+  if (!txt) return alert('วาง ชื่อ:รหัส หรือ cookie ก่อน');
+  const j = await api('/api/import', {text: txt});
+  $('imp').value = '';
+  toast('เพิ่ม ' + (j.added || 0) + ' ไอดี');
+  load();
+}
+
+async function dumpOne(i) {
+  $('dlog').textContent = 'กำลังเปิดหน้าล็อกอินและกรอกข้อมูลดึง cookie...';
+  await api('/api/dump', {indices: [i], incognito: true});
+  load();
+}
+
+async function dumpSel() {
+  const i = selIdx();
+  if (!i.length) return alert('เลือกไอดีก่อน');
+  $('dlog').textContent = 'กำลังดึง cookie ที่เลือก...';
+  await api('/api/dump', {indices: i, incognito: true});
+  load();
+}
+
+/* Callback invoked from Android Java/C when cookie is captured or status updated */
+window.onNativeCookieUpdate = function(msg) {
+  if (msg) {
+    $('dlog').textContent = msg;
+    toast(msg);
+  }
+  load();
+};
+
+load();
+</script>
+</body>
+</html>
