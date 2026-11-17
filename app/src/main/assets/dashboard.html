@@ -24,6 +24,7 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
 .badge{padding:3px 10px;border-radius:10px;font-size:11px;white-space:nowrap;display:inline-block;font-weight:600}
 .WORK{background:#1d7a34}.BAN{background:#a02020}.CAPTCHA,.VERIFY{background:#a06a00}
 .BADPASS{background:#7a1f4e}.RATE,.TWOFA{background:#5a3fa0}
+.MISMATCH{background:#b03060}.NOCOOKIE{background:#6b6b2e}
 .UNKNOWN,.ERROR{background:#555}.SKIP{background:#444}
 .mono{font-family:monospace;font-size:12px;word-break:break-all;max-width:240px}
 .note{color:#aaa;font-size:11px;line-height:1.45;display:block;margin-top:3px}
@@ -72,6 +73,12 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
     <button class="sheet" onclick="$('csvFile').click()">📂 นำเข้าไฟล์ Sheet (.csv)</button>
     <button class="sheet" onclick="exportSheetCsv()">📊 ส่งออก Sheet (.csv)</button>
     <button class="ghost" onclick="copySheetTsv()">📋 ก๊อปตารางวาง Google Sheets</button>
+  </div>
+  <div class="imp-group" style="border-top:1px solid #383838;padding-top:8px;width:100%">
+    <button onclick="checkCookieSel()" style="background:#155e63;color:#fff">🍪 เช็ค cookie (ที่เลือก)</button>
+    <button class="ghost" onclick="checkCookieAll()">🍪 ทั้งหมด</button>
+    <button onclick="verifySel()" style="background:#7a5a12;color:#fff">🔑 ตรวจรหัส:ชื่อ</button>
+    <span class="note" style="max-width:100%">เช็ค cookie = ถาม Roblox ว่า cookie เป็นของบัญชีไหน แล้วเทียบกับชื่อในชีต (เร็ว ไม่เปิดเบราว์เซอร์) · ตรวจรหัส = ล็อกอินด้วยรหัสจริง (ช้ากว่า)</span>
   </div>
 </div>
 
@@ -162,6 +169,10 @@ function nativeDispatch(path, data) {
       window.NativeApp.checkAccountsQueue(JSON.stringify(data.indices || []));
       return {ok: true};
     }
+    if (path === '/api/check_cookie') {
+      window.NativeApp.checkCookies(JSON.stringify(data.indices || []));
+      return {ok: true};
+    }
     if (path === '/api/open') {
       window.NativeApp.openAccountsQueue(JSON.stringify(data.indices || []), !!data.incognito);
       return {ok: true, opened: data.indices || [], failed: []};
@@ -201,7 +212,7 @@ function cp(t) {
   }
 }
 
-const OKST = ['WORK','BAN','CAPTCHA','VERIFY','BADPASS','RATE','2FA','UNKNOWN','ERROR','SKIP'];
+const OKST = ['WORK','BAN','CAPTCHA','VERIFY','BADPASS','RATE','2FA','UNKNOWN','ERROR','SKIP','MISMATCH','NOCOOKIE'];
 function badge(s) {
   let c = OKST.includes(s) ? s : 'UNKNOWN';
   if (c === '2FA') c = 'TWOFA';
@@ -268,6 +279,32 @@ async function one(i, act) {
   } else {
     await api('/api/open', {indices: [i], incognito: $('incog').checked});
   }
+  load();
+}
+
+async function checkCookieSel() {
+  const i = selIdx();
+  if (!i.length) return alert('เลือกไอดีก่อน (ช่องซ้ายสุด)');
+  $('dlog').textContent = 'กำลังเช็ค cookie ' + i.length + ' ไอดี (เทียบกับชื่อในชีต)...';
+  await api('/api/check_cookie', {indices: i});
+  setTimeout(load, 1200);
+}
+
+async function checkCookieAll() {
+  if (!rows.length) return alert('ยังไม่มีไอดี');
+  const all = rows.map((_, k) => k);
+  $('dlog').textContent = 'กำลังเช็ค cookie ทั้งหมด (' + all.length + ' ไอดี)...';
+  await api('/api/check_cookie', {indices: all});
+  setTimeout(load, 2000);
+}
+
+async function verifySel() {
+  const i = selIdx();
+  if (!i.length) return alert('เลือกไอดีก่อน (ช่องซ้ายสุด)');
+  const bad = i.filter(k => !rows[k] || !rows[k].username || !rows[k].password);
+  if (bad.length) return alert('ไอดีที่เลือกบางแถวไม่มีรหัส — ตรวจรหัสไม่ได้ (แถว: ' + bad.map(k => k + 1).join(', ') + ')');
+  $('dlog').textContent = 'กำลังตรวจรหัส:ชื่อ ' + i.length + ' ไอดี (ล็อกอินด้วยรหัส ไม่ใช้ cookie)...';
+  await api('/api/check', {indices: i});
   load();
 }
 

@@ -888,7 +888,7 @@ char *core_classify_page(int idx, const char *url, const char *page_text,
                str_icontains(t, "does not exist") ||
                str_icontains(t, "invalid username")) {
         status = "BADPASS";
-        note = "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง (BADPASS)";
+        note = "รหัสไม่ตรงกับชื่อผู้ใช้ (ชื่อมีอยู่ แต่รหัสผ่านผิด)";
     } else if (str_icontains(t, "too many") ||
                str_icontains(t, "try again later") ||
                str_icontains(t, "throttl") ||

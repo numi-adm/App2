@@ -431,7 +431,8 @@ public class MainActivity extends Activity {
         mainHandler.removeCallbacks(liveInspectorRunnable);
 
         Runnable launch = () -> {
-            if (cookie != null && cookie.length() > 100) {
+            // โหมดตรวจรหัส: ห้ามใช้ cookie — ต้องล็อกอินด้วย ชื่อ:รหัส จริงเท่านั้น
+            if (!autoCheckMode && cookie != null && cookie.length() > 100) {
                 CookieManager cm = CookieManager.getInstance();
                 cm.setCookie("https://www.roblox.com",
                         ".ROBLOSECURITY=" + cookie + "; Domain=.roblox.com; Path=/; Secure; HttpOnly");
@@ -462,6 +463,103 @@ public class MainActivity extends Activity {
         int savedIdx = NativeBridge.storeCookieFromHeader(
                 activeAccountIdx, user, combined, "ดึงจากหน้าต่างในแอป");
         return savedIdx >= 0 ? 1 : 0;
+    }
+
+    /* ---------- เช็ค cookie ว่าตรงกับชื่อในชีตไหม (ไม่ต้องเปิด WebView) ---------- */
+    private void startCookieCheck(int[] idxs) {
+        final int total = NativeBridge.getAccountCount();
+        final java.util.List<Integer> list = new java.util.ArrayList<>();
+        if (idxs != null && idxs.length > 0) {
+            for (int i : idxs) {
+                if (i >= 0 && i < total) list.add(i);
+            }
+        } else {
+            for (int i = 0; i < total; i++) list.add(i);
+        }
+        if (list.isEmpty()) {
+            notifyDashboard("ไม่มีไอดีให้เช็ค");
+            return;
+        }
+        notifyDashboard("กำลังเช็ค cookie " + list.size() + " ไอดี (ทีละ 5)...");
+
+        final java.util.concurrent.ExecutorService pool =
+                java.util.concurrent.Executors.newFixedThreadPool(5);
+        final java.util.concurrent.atomic.AtomicInteger left =
+                new java.util.concurrent.atomic.AtomicInteger(list.size());
+        for (final int idx : list) {
+            pool.submit(() -> {
+                try {
+                    checkOneCookie(idx);
+                } catch (Throwable ignored) {
+                } finally {
+                    if (left.decrementAndGet() == 0) {
+                        pool.shutdown();
+                        notifyDashboard("เช็ค cookie เสร็จแล้ว " + list.size() + " ไอดี");
+                    }
+                }
+            });
+        }
+    }
+
+    private void checkOneCookie(int idx) {
+        String user = NativeBridge.getAccountField(idx, "username");
+        String cookie = NativeBridge.getAccountField(idx, "cookie");
+        if (cookie == null || cookie.length() < 100) {
+            NativeBridge.updateStatus(idx, "NOCOOKIE",
+                    "ยังไม่มี cookie — เปิดไอดีแล้วล็อกอิน/ดึง cookie ก่อน");
+            return;
+        }
+        String name = null;
+        int code = 0;
+        java.net.HttpURLConnection conn = null;
+        try {
+            java.net.URL url = new java.net.URL("https://users.roblox.com/v1/users/authenticated");
+            conn = (java.net.HttpURLConnection) url.openConnection();
+            conn.setRequestProperty("Cookie", ".ROBLOSECURITY=" + cookie);
+            conn.setRequestProperty("User-Agent",
+                    "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 "
+                            + "(KHTML, like Gecko) Chrome/131.0 Mobile Safari/537.36");
+            conn.setConnectTimeout(12000);
+            conn.setReadTimeout(15000);
+            code = conn.getResponseCode();
+            if (code == 200) {
+                java.io.InputStream in = conn.getInputStream();
+                java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+                in.close();
+                org.json.JSONObject jo = new org.json.JSONObject(bo.toString("UTF-8"));
+                name = jo.optString("name", "");
+            }
+        } catch (Throwable e) {
+            code = -1;
+        } finally {
+            if (conn != null) {
+                try {
+                    conn.disconnect();
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+        String status;
+        String note;
+        if (name != null && name.length() > 0) {
+            if (user != null && user.length() > 0 && !name.equalsIgnoreCase(user)) {
+                status = "MISMATCH";
+                note = "cookie เป็นของบัญชี '" + name + "' ไม่ตรงกับชื่อในชีต '" + user + "'";
+            } else {
+                status = "WORK";
+                note = "cookie ตรงกับชื่อผู้ใช้ '" + name + "' — ใช้ได้";
+            }
+        } else if (code == 401 || code == 403) {
+            status = "BADPASS";
+            note = "cookie หมดอายุ/ใช้ไม่ได้";
+        } else {
+            status = "ERROR";
+            note = "ติดต่อ Roblox ไม่ได้ (code " + code + ")";
+        }
+        NativeBridge.updateStatus(idx, status, note);
     }
 
     /* Called when user presses "ปิด / ถัดไป ⏭": grabs any cookie first, then opens next account in queue! */
@@ -597,6 +695,12 @@ public class MainActivity extends Activity {
         public void checkAccountsQueue(String jsonIndices) {
             int[] idxs = parseIntArray(jsonIndices);
             runOnUiThread(() -> startAccountQueue(idxs, true, true, true));
+        }
+
+        @JavascriptInterface
+        public void checkCookies(String jsonIndices) {
+            int[] idxs = parseIntArray(jsonIndices);
+            runOnUiThread(() -> startCookieCheck(idxs));
         }
 
         @JavascriptInterface
