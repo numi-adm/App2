@@ -38,6 +38,18 @@ static void safe_copy(char *dst, size_t dst_sz, const char *src) {
     dst[dst_sz - 1] = '\0';
 }
 
+static int str_icmp(const char *a, const char *b) {
+    if (!a || !b) return -1;
+    while (*a && *b) {
+        int ca = tolower((unsigned char)*a);
+        int cb = tolower((unsigned char)*b);
+        if (ca != cb) return ca - cb;
+        a++;
+        b++;
+    }
+    return tolower((unsigned char)*a) - tolower((unsigned char)*b);
+}
+
 /* Minimal JSON string unescape & extraction helper */
 static const char *skip_ws(const char *p) {
     while (*p && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
@@ -277,6 +289,59 @@ int core_get_count(void) {
     return g_account_count;
 }
 
+static int find_username_idx(const char *u) {
+    if (!u || !u[0]) return -1;
+    for (int i = 0; i < g_account_count; i++) {
+        if (str_icmp(g_accounts[i].username, u) == 0) return i;
+    }
+    return -1;
+}
+
+static int find_cookie_idx(const char *ck) {
+    if (!ck || !ck[0]) return -1;
+    for (int i = 0; i < g_account_count; i++) {
+        if (strcmp(g_accounts[i].cookie, ck) == 0) return i;
+    }
+    return -1;
+}
+
+/* Upsert account: updates existing if username or cookie matches, otherwise appends */
+static int upsert_account(const char *username, const char *password, const char *cookie,
+                          const char *status, const char *created, const char *checked,
+                          const char *note) {
+    int idx = find_username_idx(username);
+    if (idx < 0 && cookie && cookie[0]) {
+        idx = find_cookie_idx(cookie);
+    }
+    if (idx >= 0) {
+        Account *a = &g_accounts[idx];
+        if (username && username[0]) safe_copy(a->username, sizeof(a->username), username);
+        if (password && password[0]) safe_copy(a->password, sizeof(a->password), password);
+        if (cookie && cookie[0])     safe_copy(a->cookie,   sizeof(a->cookie),   cookie);
+        if (status && status[0])     safe_copy(a->status,   sizeof(a->status),   status);
+        if (checked && checked[0])   safe_copy(a->checked,  sizeof(a->checked),  checked);
+        if (note && note[0])         safe_copy(a->note,     sizeof(a->note),     note);
+        return 1;
+    }
+    if (g_account_count >= MAX_ACCOUNTS) return 0;
+    if ((!username || !username[0]) && (!cookie || !cookie[0])) return 0;
+
+    Account *a = &g_accounts[g_account_count++];
+    memset(a, 0, sizeof(Account));
+    safe_copy(a->username, sizeof(a->username), username);
+    safe_copy(a->password, sizeof(a->password), password);
+    safe_copy(a->cookie,   sizeof(a->cookie),   cookie);
+    if (created && created[0]) {
+        safe_copy(a->created, sizeof(a->created), created);
+    } else {
+        now_str(a->created, sizeof(a->created));
+    }
+    if (checked && checked[0]) safe_copy(a->checked, sizeof(a->checked), checked);
+    safe_copy(a->status, sizeof(a->status), (status && status[0]) ? status : "UNKNOWN");
+    if (note && note[0]) safe_copy(a->note, sizeof(a->note), note);
+    return 1;
+}
+
 int core_add_account(const char *username, const char *password, const char *cookie) {
     if (g_account_count >= MAX_ACCOUNTS) return -1;
     if ((!username || !username[0]) && (!cookie || !cookie[0])) return -1;
@@ -292,32 +357,25 @@ int core_add_account(const char *username, const char *password, const char *coo
     return g_account_count - 1;
 }
 
-static int has_username(const char *u) {
-    if (!u || !u[0]) return 0;
-    for (int i = 0; i < g_account_count; i++) {
-        if (strcmp(g_accounts[i].username, u) == 0) return 1;
-    }
-    return 0;
-}
-
-static int has_cookie(const char *ck) {
-    if (!ck || !ck[0]) return 0;
-    for (int i = 0; i < g_account_count; i++) {
-        if (strcmp(g_accounts[i].cookie, ck) == 0) return 1;
-    }
-    return 0;
-}
-
 int core_import_text(const char *text) {
     if (!text) return 0;
+    /* If it looks like a CSV file with header or commas, delegate to core_import_csv */
+    if (strstr(text, "username,password") != NULL || strstr(text, "username\tpassword") != NULL) {
+        return core_import_csv(text);
+    }
     int added = 0;
     const char *p = text;
+
+    /* Skip UTF-8 BOM if present */
+    if ((unsigned char)p[0] == 0xEF && (unsigned char)p[1] == 0xBB && (unsigned char)p[2] == 0xBF) {
+        p += 3;
+    }
 
     while (*p && g_account_count < MAX_ACCOUNTS) {
         const char *eol = strpbrk(p, "\r\n");
         size_t len = eol ? (size_t)(eol - p) : strlen(p);
 
-        char line[MAX_COOKIE + 256];
+        char line[MAX_COOKIE + 512];
         if (len >= sizeof(line)) len = sizeof(line) - 1;
         memcpy(line, p, len);
         line[len] = '\0';
@@ -332,40 +390,29 @@ int core_import_text(const char *text) {
         }
 
         if (slen > 0) {
-            if (slen > 300 && strstr(s, "_|WARNING") != NULL) {
-                /* Raw .ROBLOSECURITY cookie */
-                if (!has_cookie(s)) {
-                    Account *a = &g_accounts[g_account_count++];
-                    memset(a, 0, sizeof(Account));
-                    safe_copy(a->cookie, sizeof(a->cookie), s);
-                    now_str(a->created, sizeof(a->created));
-                    safe_copy(a->status, sizeof(a->status), "UNKNOWN");
-                    added++;
-                }
+            if (strncmp(s, "_|WARNING", 9) == 0) {
+                /* Raw .ROBLOSECURITY cookie only */
+                added += upsert_account("", "", s, "UNKNOWN", NULL, NULL, NULL);
             } else {
-                char *colon = strchr(s, ':');
-                if (colon) {
-                    *colon = '\0';
+                /* Support user:pass:_|WARNING... or user:pass or user,pass,cookie */
+                char *warn = strstr(s, "_|WARNING");
+                char ck_part[MAX_COOKIE] = "";
+                if (warn && warn > s && (*(warn - 1) == ':' || *(warn - 1) == ',' || *(warn - 1) == '\t')) {
+                    safe_copy(ck_part, sizeof(ck_part), warn);
+                    *(warn - 1) = '\0';
+                }
+                char *sep = strchr(s, ':');
+                if (!sep) sep = strchr(s, ',');
+                if (!sep) sep = strchr(s, '\t');
+                if (sep) {
+                    *sep = '\0';
                     char *u = s;
-                    char *pw = colon + 1;
+                    char *pw = sep + 1;
                     while (*u == ' ') u++;
-                    while (*pw == ' ') pw++;
-                    if (*u && !has_username(u)) {
-                        Account *a = &g_accounts[g_account_count++];
-                        memset(a, 0, sizeof(Account));
-                        safe_copy(a->username, sizeof(a->username), u);
-                        safe_copy(a->password, sizeof(a->password), pw);
-                        now_str(a->created, sizeof(a->created));
-                        safe_copy(a->status, sizeof(a->status), "UNKNOWN");
-                        added++;
-                    }
-                } else if (!has_username(s)) {
-                    Account *a = &g_accounts[g_account_count++];
-                    memset(a, 0, sizeof(Account));
-                    safe_copy(a->username, sizeof(a->username), s);
-                    now_str(a->created, sizeof(a->created));
-                    safe_copy(a->status, sizeof(a->status), "UNKNOWN");
-                    added++;
+                    while (*pw == ' ' || *pw == ':' || *pw == ',') pw++;
+                    added += upsert_account(u, pw, ck_part, ck_part[0] ? "WORK" : "UNKNOWN", NULL, NULL, NULL);
+                } else {
+                    added += upsert_account(s, "", ck_part, ck_part[0] ? "WORK" : "UNKNOWN", NULL, NULL, NULL);
                 }
             }
         }
@@ -379,6 +426,216 @@ int core_import_text(const char *text) {
         core_save_db();
     }
     return added;
+}
+
+/* Parse a single CSV/TSV cell, advancing *cursor past the delimiter (',' or '\t') */
+static int parse_csv_cell(const char **cursor, char *out, size_t out_sz, char delim) {
+    const char *p = *cursor;
+    if (!p || !*p || *p == '\r' || *p == '\n') {
+        if (out_sz > 0) out[0] = '\0';
+        return 0;
+    }
+    size_t i = 0;
+    if (*p == '"') {
+        p++;
+        while (*p) {
+            if (*p == '"') {
+                if (*(p + 1) == '"') {
+                    if (i + 1 < out_sz) out[i++] = '"';
+                    p += 2;
+                } else {
+                    p++;
+                    break;
+                }
+            } else {
+                if (i + 1 < out_sz) out[i++] = *p;
+                p++;
+            }
+        }
+        while (*p && *p != delim && *p != '\r' && *p != '\n') p++;
+        if (*p == delim) p++;
+    } else {
+        while (*p && *p != delim && *p != '\r' && *p != '\n') {
+            if (i + 1 < out_sz) out[i++] = *p;
+            p++;
+        }
+        if (*p == delim) p++;
+    }
+    if (out_sz > 0) out[i] = '\0';
+    *cursor = p;
+    return 1;
+}
+
+int core_import_csv(const char *csv_text) {
+    if (!csv_text) return 0;
+    const char *p = csv_text;
+
+    /* Skip UTF-8 BOM if present */
+    if ((unsigned char)p[0] == 0xEF && (unsigned char)p[1] == 0xBB && (unsigned char)p[2] == 0xBF) {
+        p += 3;
+    }
+
+    int added = 0;
+    int line_no = 0;
+
+    while (*p && g_account_count < MAX_ACCOUNTS) {
+        while (*p == '\r' || *p == '\n') p++;
+        if (!*p) break;
+
+        const char *line_start = p;
+        /* Detect delimiter on this line (comma vs tab) */
+        const char *eol = line_start;
+        int in_q = 0;
+        int has_tab = 0, has_comma = 0;
+        while (*eol && !(!in_q && (*eol == '\r' || *eol == '\n'))) {
+            if (*eol == '"') in_q = !in_q;
+            else if (!in_q && *eol == '\t') has_tab = 1;
+            else if (!in_q && *eol == ',') has_comma = 1;
+            eol++;
+        }
+        line_no++;
+
+        if (!has_comma && !has_tab) {
+            /* Fallback: single line with colon or raw cookie */
+            size_t llen = (size_t)(eol - line_start);
+            char single[MAX_COOKIE + 512];
+            if (llen >= sizeof(single)) llen = sizeof(single) - 1;
+            memcpy(single, line_start, llen);
+            single[llen] = '\0';
+            added += core_import_text(single);
+            p = eol;
+            continue;
+        }
+
+        char delim = (has_tab && !has_comma) ? '\t' : ',';
+        const char *cur = line_start;
+        char c_user[MAX_USERNAME] = "";
+        char c_pass[MAX_PASSWORD] = "";
+        char c_cookie[MAX_COOKIE] = "";
+        char c_status[MAX_STATUS] = "";
+        char c_created[MAX_TIME] = "";
+        char c_checked[MAX_TIME] = "";
+        char c_note[MAX_NOTE] = "";
+
+        parse_csv_cell(&cur, c_user,    sizeof(c_user),    delim);
+        parse_csv_cell(&cur, c_pass,    sizeof(c_pass),    delim);
+        parse_csv_cell(&cur, c_cookie,  sizeof(c_cookie),  delim);
+        parse_csv_cell(&cur, c_status,  sizeof(c_status),  delim);
+        parse_csv_cell(&cur, c_created, sizeof(c_created), delim);
+        parse_csv_cell(&cur, c_checked, sizeof(c_checked), delim);
+        parse_csv_cell(&cur, c_note,    sizeof(c_note),    delim);
+
+        /* Skip header row */
+        if (line_no == 1 && (str_icmp(c_user, "username") == 0 || str_icmp(c_user, "user") == 0 ||
+                             str_icmp(c_user, "ชื่อ") == 0)) {
+            p = eol;
+            continue;
+        }
+
+        /* If column 2 (password) is actually a cookie (_|WARNING), shift it */
+        if (strncmp(c_pass, "_|WARNING", 9) == 0 && !c_cookie[0]) {
+            safe_copy(c_cookie, sizeof(c_cookie), c_pass);
+            c_pass[0] = '\0';
+        }
+        /* If column 1 (username) is user:pass, split it */
+        if (!c_pass[0] && strchr(c_user, ':') != NULL && strncmp(c_user, "_|WARNING", 9) != 0) {
+            char *cl = strchr(c_user, ':');
+            *cl = '\0';
+            safe_copy(c_pass, sizeof(c_pass), cl + 1);
+        }
+
+        if (c_user[0] || c_cookie[0]) {
+            if (!c_status[0]) {
+                safe_copy(c_status, sizeof(c_status), c_cookie[0] ? "WORK" : "UNKNOWN");
+            }
+            added += upsert_account(c_user, c_pass, c_cookie, c_status, c_created, c_checked, c_note);
+        }
+
+        p = eol;
+    }
+
+    if (added > 0) {
+        core_save_db();
+    }
+    return added;
+}
+
+static size_t csv_cell_escaped_len(const char *s) {
+    if (!s) return 2;
+    size_t n = 2; /* quotes */
+    for (; *s; s++) {
+        if (*s == '"') n += 2;
+        else n += 1;
+    }
+    return n;
+}
+
+static char *append_csv_cell(char *p, const char *val, char tail) {
+    *p++ = '"';
+    if (val) {
+        for (; *val; val++) {
+            if (*val == '"') {
+                *p++ = '"';
+                *p++ = '"';
+            } else if (*val == '\r' || *val == '\n') {
+                *p++ = ' ';
+            } else {
+                *p++ = *val;
+            }
+        }
+    }
+    *p++ = '"';
+    if (tail) *p++ = tail;
+    return p;
+}
+
+char *core_export_csv(const int *indices, int count) {
+    int use_all = (!indices || count <= 0);
+    int total = use_all ? g_account_count : count;
+
+    size_t cap = 128;
+    for (int k = 0; k < total; k++) {
+        int i = use_all ? k : indices[k];
+        if (i < 0 || i >= g_account_count) continue;
+        Account *a = &g_accounts[i];
+        cap += 32
+            + csv_cell_escaped_len(a->username)
+            + csv_cell_escaped_len(a->password)
+            + csv_cell_escaped_len(a->cookie)
+            + csv_cell_escaped_len(a->status)
+            + csv_cell_escaped_len(a->created)
+            + csv_cell_escaped_len(a->checked)
+            + csv_cell_escaped_len(a->note);
+    }
+
+    char *out = (char *)malloc(cap);
+    if (!out) return NULL;
+    char *p = out;
+
+    /* UTF-8 BOM so Microsoft Excel and Google Sheets open Thai & UTF-8 cleanly */
+    *p++ = (char)0xEF;
+    *p++ = (char)0xBB;
+    *p++ = (char)0xBF;
+
+    const char *header = "username,password,cookie,status,created,checked,note\r\n";
+    memcpy(p, header, strlen(header));
+    p += strlen(header);
+
+    for (int k = 0; k < total; k++) {
+        int i = use_all ? k : indices[k];
+        if (i < 0 || i >= g_account_count) continue;
+        Account *a = &g_accounts[i];
+        p = append_csv_cell(p, a->username, ',');
+        p = append_csv_cell(p, a->password, ',');
+        p = append_csv_cell(p, a->cookie,   ',');
+        p = append_csv_cell(p, a->status[0] ? a->status : "UNKNOWN", ',');
+        p = append_csv_cell(p, a->created,  ',');
+        p = append_csv_cell(p, a->checked,  ',');
+        p = append_csv_cell(p, a->note,     '\r');
+        *p++ = '\n';
+    }
+    *p = '\0';
+    return out;
 }
 
 int core_delete_indices(const int *indices, int count) {
@@ -406,30 +663,13 @@ int core_delete_indices(const int *indices, int count) {
     return removed;
 }
 
-static int str_icmp(const char *a, const char *b) {
-    if (!a || !b) return -1;
-    while (*a && *b) {
-        int ca = tolower((unsigned char)*a);
-        int cb = tolower((unsigned char)*b);
-        if (ca != cb) return ca - cb;
-        a++;
-        b++;
-    }
-    return tolower((unsigned char)*a) - tolower((unsigned char)*b);
-}
-
 int core_store_cookie(int idx, const char *username, const char *cookie,
                       const char *status, const char *note) {
     if (!cookie || strlen(cookie) < 50) return -1;
 
     int target = (idx >= 0 && idx < g_account_count) ? idx : -1;
     if (target < 0 && username && username[0]) {
-        for (int i = 0; i < g_account_count; i++) {
-            if (str_icmp(g_accounts[i].username, username) == 0) {
-                target = i;
-                break;
-            }
-        }
+        target = find_username_idx(username);
     }
 
     if (target < 0) {
@@ -589,6 +829,38 @@ Java_com_rooo_dashboard_NativeBridge_importText(JNIEnv *env, jclass clazz, jstri
     int added = core_import_text(txt);
     (*env)->ReleaseStringUTFChars(env, jtext, txt);
     return added;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_rooo_dashboard_NativeBridge_importCsv(JNIEnv *env, jclass clazz, jstring jcsv) {
+    (void)clazz;
+    if (!jcsv) return 0;
+    const char *csv = (*env)->GetStringUTFChars(env, jcsv, NULL);
+    int added = core_import_csv(csv);
+    (*env)->ReleaseStringUTFChars(env, jcsv, csv);
+    return added;
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_rooo_dashboard_NativeBridge_exportCsv(JNIEnv *env, jclass clazz, jintArray jindices) {
+    (void)clazz;
+    char *csv = NULL;
+    if (jindices != NULL) {
+        jsize len = (*env)->GetArrayLength(env, jindices);
+        if (len > 0) {
+            jint *elems = (*env)->GetIntArrayElements(env, jindices, NULL);
+            csv = core_export_csv((const int *)elems, (int)len);
+            (*env)->ReleaseIntArrayElements(env, jindices, elems, JNI_ABORT);
+        } else {
+            csv = core_export_csv(NULL, 0);
+        }
+    } else {
+        csv = core_export_csv(NULL, 0);
+    }
+    if (!csv) return (*env)->NewStringUTF(env, "");
+    jstring res = (*env)->NewStringUTF(env, csv);
+    free(csv);
+    return res;
 }
 
 JNIEXPORT jint JNICALL

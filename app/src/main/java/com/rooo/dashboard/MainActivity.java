@@ -5,13 +5,16 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -28,13 +31,24 @@ import org.json.JSONArray;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 
 public class MainActivity extends Activity {
+
+    private static final int REQ_FILE_CHOOSER = 1001;
+    private static final int REQ_SAVE_CSV = 1002;
 
     private WebView dashWebView;
     private WebView robloxWebView;
     private LinearLayout browserContainer;
     private TextView browserTitle;
+
+    private ValueCallback<Uri[]> fileUploadCallback;
+    private String pendingCsvExport = "";
 
     private int activeAccountIdx = -1;
     private boolean autoFillPending = false;
@@ -59,8 +73,32 @@ public class MainActivity extends Activity {
         WebSettings ds = dashWebView.getSettings();
         ds.setJavaScriptEnabled(true);
         ds.setDomStorageEnabled(true);
+        ds.setAllowFileAccess(true);
+        ds.setAllowContentAccess(true);
         dashWebView.setBackgroundColor(Color.parseColor("#1e1e1e"));
-        dashWebView.setWebChromeClient(new WebChromeClient());
+        dashWebView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onShowFileChooser(WebView webView,
+                                             ValueCallback<Uri[]> filePathCallback,
+                                             FileChooserParams fileChooserParams) {
+                if (fileUploadCallback != null) {
+                    fileUploadCallback.onReceiveValue(null);
+                }
+                fileUploadCallback = filePathCallback;
+                try {
+                    Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("*/*");
+                    String[] mimeTypes = {"text/csv", "text/comma-separated-values", "text/plain", "*/*"};
+                    intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes);
+                    startActivityForResult(Intent.createChooser(intent, "เลือกไฟล์ Sheet (.csv)"), REQ_FILE_CHOOSER);
+                    return true;
+                } catch (Exception e) {
+                    fileUploadCallback = null;
+                    return false;
+                }
+            }
+        });
         dashWebView.setWebViewClient(new WebViewClient());
         dashWebView.addJavascriptInterface(new JsBridge(), "NativeApp");
         dashWebView.loadUrl("file:///android_asset/dashboard.html");
@@ -154,6 +192,34 @@ public class MainActivity extends Activity {
         setContentView(root);
     }
 
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_FILE_CHOOSER) {
+            if (fileUploadCallback != null) {
+                Uri[] results = null;
+                if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
+                    results = new Uri[]{data.getData()};
+                }
+                fileUploadCallback.onReceiveValue(results);
+                fileUploadCallback = null;
+            }
+        } else if (requestCode == REQ_SAVE_CSV) {
+            if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
+                Uri uri = data.getData();
+                try (OutputStream out = getContentResolver().openOutputStream(uri)) {
+                    if (out != null && pendingCsvExport != null) {
+                        out.write(pendingCsvExport.getBytes(StandardCharsets.UTF_8));
+                        out.flush();
+                        notifyDashboard("บันทึกไฟล์ Sheet (.csv) เรียบร้อยแล้ว!");
+                    }
+                } catch (Exception e) {
+                    notifyDashboard("บันทึกไฟล์ไม่สำเร็จ: " + e.getMessage());
+                }
+            }
+        }
+    }
+
     private Button makeBarButton(String text, String hexColor) {
         Button b = new Button(this);
         b.setText(text);
@@ -208,7 +274,6 @@ public class MainActivity extends Activity {
 
         Runnable launch = () -> {
             if (!autoFill && cookie != null && cookie.length() > 100) {
-                // Inject .ROBLOSECURITY cookie and open /home directly
                 CookieManager cm = CookieManager.getInstance();
                 cm.setCookie("https://www.roblox.com",
                         ".ROBLOSECURITY=" + cookie + "; Domain=.roblox.com; Path=/; Secure; HttpOnly");
@@ -294,16 +359,47 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public int importCsv(String csvText) {
+            return NativeBridge.importCsv(csvText);
+        }
+
+        @JavascriptInterface
+        public String exportCsv(String jsonIndices) {
+            int[] idxs = parseIntArray(jsonIndices);
+            String csv = NativeBridge.exportCsv(idxs);
+            pendingCsvExport = csv != null ? csv : "";
+            runOnUiThread(() -> {
+                try {
+                    String stamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
+                    Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("text/csv");
+                    intent.putExtra(Intent.EXTRA_TITLE, "roblox_accounts_" + stamp + ".csv");
+                    startActivityForResult(intent, REQ_SAVE_CSV);
+                } catch (Exception e) {
+                    notifyDashboard("ไม่สามารถเปิดหน้าต่างบันทึกไฟล์ได้: " + e.getMessage());
+                }
+            });
+            return pendingCsvExport;
+        }
+
+        @JavascriptInterface
         public int deleteIndices(String jsonIndices) {
+            int[] idxs = parseIntArray(jsonIndices);
+            return idxs != null ? NativeBridge.deleteIndices(idxs) : 0;
+        }
+
+        private int[] parseIntArray(String jsonIndices) {
+            if (jsonIndices == null || jsonIndices.isEmpty()) return null;
             try {
                 JSONArray arr = new JSONArray(jsonIndices);
                 int[] idxs = new int[arr.length()];
                 for (int i = 0; i < arr.length(); i++) {
                     idxs[i] = arr.getInt(i);
                 }
-                return NativeBridge.deleteIndices(idxs);
+                return idxs;
             } catch (Exception e) {
-                return 0;
+                return null;
             }
         }
 

@@ -12,6 +12,7 @@ h1{font-size:18px;margin:4px 0 10px 0;display:flex;align-items:center;justify-co
 button{background:#2d7ff9;border:none;color:#fff;padding:9px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500}
 button:active{opacity:0.8;transform:scale(0.98)}
 button.ghost{background:#444}
+button.sheet{background:#1d7a34}
 button.danger{background:#a02828}
 button:disabled{background:#555;cursor:default}
 input,select,textarea{background:#2a2a2a;color:#eee;border:1px solid #555;border-radius:8px;padding:8px 10px;font-size:13px}
@@ -29,7 +30,7 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
 .row-actions button{padding:6px 10px;font-size:12px}
 .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#2d7ff9;color:#fff;padding:8px 16px;border-radius:20px;font-size:13px;box-shadow:0 4px 14px rgba(0,0,0,.45);display:none;z-index:999}
 @media (max-width:600px){
-  .imp-group{width:100%;display:flex;gap:6px}
+  .imp-group{width:100%;display:flex;gap:6px;flex-wrap:wrap}
   .imp-group input{flex:1;min-width:0}
 }
 </style>
@@ -55,20 +56,25 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
 
 <div class="bar">
   <div class="imp-group">
-    <input id="imp" placeholder="วาง ชื่อ:รหัส หรือ cookie" style="width:260px">
+    <input id="imp" placeholder="วาง ชื่อ:รหัส หรือ cookie (หรือ ชื่อ:รหัส:cookie)" style="width:270px">
     <button onclick="importC()">นำเข้า</button>
   </div>
   <div class="imp-group">
-    <input id="au" placeholder="username" style="width:115px">
-    <input id="ap" placeholder="password" style="width:115px">
+    <input id="au" placeholder="username" style="width:110px">
+    <input id="ap" placeholder="password" style="width:110px">
     <button onclick="addAcc()">เพิ่มไอดี</button>
+  </div>
+  <div class="imp-group" style="border-top:1px solid #383838;padding-top:8px;width:100%">
+    <input id="csvFile" type="file" accept=".csv,.tsv,.txt,text/csv,text/plain" style="display:none" onchange="onCsvPicked(this)">
+    <button class="sheet" onclick="$('csvFile').click()">📂 นำเข้าไฟล์ Sheet (.csv)</button>
+    <button class="sheet" onclick="exportSheetCsv()">📊 ส่งออก Sheet (.csv)</button>
+    <button class="ghost" onclick="copySheetTsv()">📋 ก๊อปตารางวาง Google Sheets</button>
   </div>
 </div>
 
 <div class="note" style="margin-bottom:10px;background:#252525;padding:10px;border-radius:8px">
   • ไอดีที่ติด <b>Verify you're human</b> → หน้าต่าง Roblox ในแอปจะเปิดค้างไว้ให้กด <b>Press and hold</b> เอง แล้วกด <b>ดึง cookie จากหน้าต่างที่เปิด</b> · <b>ห้ามกด Logout</b><br>
-  • <b>ดึง cookie</b> = ล้าง cookie + cache เดิม แล้วเข้าหน้า <b>roblox.com/login</b> กรอกชื่อ+รหัสให้อัตโนมัติผ่านเอนจินภาษา C<br>
-  • <b>เปิดเอง</b> = เปิดหน้าเว็บ Roblox ให้ล็อกอินด้วยตัวเอง แล้วกดดึง cookie เก็บเข้าไอดีนั้นได้ทันที
+  • <b>นำเข้า / ส่งออก Sheet (.csv)</b> = รองรับไฟล์ตาราง Excel / Google Sheets แยกคอลัมน์ <code>username, password, cookie, status</code> (ถ้าติ๊กเลือกไอดีไว้จะส่งออกเฉพาะที่เลือก ถ้าไม่ติ๊กจะส่งออกทั้งหมด)
 </div>
 
 <div class="table-wrap">
@@ -100,7 +106,7 @@ function toast(msg) {
   el.textContent = msg;
   el.style.display = 'block';
   clearTimeout(window._tTimer);
-  window._tTimer = setTimeout(() => { el.style.display = 'none'; }, 2400);
+  window._tTimer = setTimeout(() => { el.style.display = 'none'; }, 2600);
 }
 
 function esc(s) {
@@ -136,6 +142,14 @@ function nativeDispatch(path, data) {
     if (path === '/api/import') {
       const added = window.NativeApp.importText(data.text || '');
       return {ok: true, added: added};
+    }
+    if (path === '/api/import_csv') {
+      const added = window.NativeApp.importCsv(data.csv || '');
+      return {ok: true, added: added};
+    }
+    if (path === '/api/export_csv') {
+      const csv = window.NativeApp.exportCsv(JSON.stringify(data.indices || []));
+      return {ok: true, csv: csv};
     }
     if (path === '/api/delete') {
       window.NativeApp.deleteIndices(JSON.stringify(data.indices || []));
@@ -301,8 +315,67 @@ async function importC() {
   if (!txt) return alert('วาง ชื่อ:รหัส หรือ cookie ก่อน');
   const j = await api('/api/import', {text: txt});
   $('imp').value = '';
-  toast('เพิ่ม ' + (j.added || 0) + ' ไอดี');
+  toast('นำเข้า/อัปเดต ' + (j.added || 0) + ' ไอดี');
   load();
+}
+
+function onCsvPicked(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async function(e) {
+    const content = e.target.result || '';
+    const j = await api('/api/import_csv', {csv: content});
+    input.value = '';
+    const cnt = j.added || 0;
+    $('dlog').textContent = 'นำเข้าไฟล์ Sheet สำเร็จ ' + cnt + ' รายการ';
+    toast('นำเข้า Sheet สำเร็จ ' + cnt + ' รายการ');
+    load();
+  };
+  reader.readAsText(file, 'utf-8');
+}
+
+async function exportSheetCsv() {
+  if (!rows.length) return alert('ยังไม่มีข้อมูลไอดีให้ส่งออก');
+  const idxs = selIdx();
+  const j = await api('/api/export_csv', {indices: idxs});
+  const csv = (j && j.csv) || '';
+  if (!csv) return alert('ส่งออกไม่สำเร็จ');
+
+  if (!isNative) {
+    const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'roblox_accounts.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast('ดาวน์โหลดไฟล์ roblox_accounts.csv แล้ว');
+  } else {
+    $('dlog').textContent = 'เลือกที่เก็บไฟล์ .csv บนมือถือได้เลย';
+  }
+}
+
+function copySheetTsv() {
+  if (!rows.length) return alert('ยังไม่มีข้อมูลไอดี');
+  const idxs = selIdx();
+  const list = idxs.length ? idxs.map(i => rows[i]).filter(Boolean) : rows;
+  const lines = ['username\tpassword\tcookie\tstatus\tcreated\tchecked'];
+  list.forEach(r => {
+    const clean = s => String(s || '').replace(/[\t\r\n]+/g, ' ');
+    lines.push([
+      clean(r.username),
+      clean(r.password),
+      clean(r.cookie),
+      clean(r.status || 'UNKNOWN'),
+      clean(r.created),
+      clean(r.checked)
+    ].join('\t'));
+  });
+  cp(lines.join('\n'));
+  $('dlog').textContent = 'คัดลอกตาราง ' + list.length + ' ไอดีแล้ว (นำไปกดวางใน Google Sheets / Excel ได้เลย)';
 }
 
 async function dumpOne(i) {

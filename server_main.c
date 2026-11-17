@@ -65,6 +65,7 @@ static void extract_json_str(const char *body, const char *key, char *out, size_
             p++;
             if (*p == 'n') out[i++] = '\n';
             else if (*p == 'r') out[i++] = '\r';
+            else if (*p == 't') out[i++] = '\t';
             else out[i++] = *p;
             p++;
         } else {
@@ -94,9 +95,13 @@ static int extract_json_int_array(const char *body, const char *key, int *out, i
 }
 
 static void handle_client(SOCKET client) {
-    char req[65536];
-    int rlen = recv(client, req, sizeof(req) - 1, 0);
-    if (rlen <= 0) return;
+    char *req = (char *)malloc(262144);
+    if (!req) return;
+    int rlen = recv(client, req, 262143, 0);
+    if (rlen <= 0) {
+        free(req);
+        return;
+    }
     req[rlen] = '\0';
 
     char method[16] = {0}, path[256] = {0};
@@ -111,6 +116,7 @@ static void handle_client(SOCKET client) {
             FILE *fp = fopen(HTML_PATH, "rb");
             if (!fp) {
                 send_response(client, 404, "text/plain", "Not Found", 9);
+                free(req);
                 return;
             }
             fseek(fp, 0, SEEK_END);
@@ -123,16 +129,19 @@ static void handle_client(SOCKET client) {
                 free(html);
             }
             fclose(fp);
+            free(req);
             return;
         }
         if (strcmp(path, "/api/accounts") == 0) {
             char *j = core_get_accounts_json();
             send_json(client, j ? j : "[]");
             free(j);
+            free(req);
             return;
         }
         if (strcmp(path, "/api/live") == 0) {
             send_json(client, "{\"open\":[],\"manual\":[]}");
+            free(req);
             return;
         }
     } else if (strcmp(method, "POST") == 0) {
@@ -142,15 +151,62 @@ static void handle_client(SOCKET client) {
             extract_json_str(body, "password", p, sizeof(p));
             core_add_account(u, p, "");
             send_json(client, "{\"ok\":true}");
+            free(req);
             return;
         }
         if (strcmp(path, "/api/import") == 0) {
-            char txt[32768];
-            extract_json_str(body, "text", txt, sizeof(txt));
-            int added = core_import_text(txt);
+            char *txt = (char *)malloc(131072);
+            int added = 0;
+            if (txt) {
+                extract_json_str(body, "text", txt, 131072);
+                added = core_import_text(txt);
+                free(txt);
+            }
             char resp[128];
             snprintf(resp, sizeof(resp), "{\"ok\":true,\"added\":%d}", added);
             send_json(client, resp);
+            free(req);
+            return;
+        }
+        if (strcmp(path, "/api/import_csv") == 0) {
+            char *csv = (char *)malloc(131072);
+            int added = 0;
+            if (csv) {
+                extract_json_str(body, "csv", csv, 131072);
+                added = core_import_csv(csv);
+                free(csv);
+            }
+            char resp[128];
+            snprintf(resp, sizeof(resp), "{\"ok\":true,\"added\":%d}", added);
+            send_json(client, resp);
+            free(req);
+            return;
+        }
+        if (strcmp(path, "/api/export_csv") == 0) {
+            int idxs[MAX_ACCOUNTS];
+            int cnt = extract_json_int_array(body, "indices", idxs, MAX_ACCOUNTS);
+            char *csv = core_export_csv(cnt > 0 ? idxs : NULL, cnt);
+            if (!csv) {
+                send_json(client, "{\"ok\":false}");
+            } else {
+                size_t clen = strlen(csv);
+                char *resp = (char *)malloc(clen * 2 + 64);
+                if (resp) {
+                    char *q = resp + sprintf(resp, "{\"ok\":true,\"csv\":\"");
+                    for (const char *s = csv; *s; s++) {
+                        if (*s == '"') { *q++ = '\\'; *q++ = '"'; }
+                        else if (*s == '\\') { *q++ = '\\'; *q++ = '\\'; }
+                        else if (*s == '\r') { *q++ = '\\'; *q++ = 'r'; }
+                        else if (*s == '\n') { *q++ = '\\'; *q++ = 'n'; }
+                        else *q++ = *s;
+                    }
+                    strcpy(q, "\"}");
+                    send_json(client, resp);
+                    free(resp);
+                }
+                free(csv);
+            }
+            free(req);
             return;
         }
         if (strcmp(path, "/api/delete") == 0) {
@@ -158,17 +214,20 @@ static void handle_client(SOCKET client) {
             int cnt = extract_json_int_array(body, "indices", idxs, MAX_ACCOUNTS);
             core_delete_indices(idxs, cnt);
             send_json(client, "{\"ok\":true}");
+            free(req);
             return;
         }
         if (strcmp(path, "/api/open") == 0 || strcmp(path, "/api/manual_open") == 0 ||
             strcmp(path, "/api/dump") == 0 || strcmp(path, "/api/close") == 0 ||
             strcmp(path, "/api/grab") == 0) {
             send_json(client, "{\"ok\":true,\"opened\":[],\"failed\":[],\"got\":0,\"port\":\"WebView\"}");
+            free(req);
             return;
         }
     }
 
     send_response(client, 404, "text/plain", "Not Found", 9);
+    free(req);
 }
 
 int main(void) {

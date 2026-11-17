@@ -9,6 +9,8 @@ public class NativeBridge {
     public static native String getAccountsJson();
     public static native int addAccount(String username, String password, String cookie);
     public static native int importText(String text);
+    public static native int importCsv(String csvText);
+    public static native String exportCsv(int[] indices);
     public static native int deleteIndices(int[] indices);
     public static native int storeCookieFromHeader(int idx, String username, String rawCookieHeader, String note);
     public static native void updateStatus(int idx, String status, String note);

@@ -42,8 +42,15 @@ int core_get_count(void);
 /* Add single account */
 int core_add_account(const char *username, const char *password, const char *cookie);
 
-/* Import multi-line text ("user:pass" or "_|WARNING..." cookie per line). Returns count added. */
+/* Import multi-line text ("user:pass", "user:pass:cookie", or "_|WARNING..." cookie per line). Returns count added/updated. */
 int core_import_text(const char *text);
+
+/* Import CSV / Sheet text (columns: username,password,cookie,status,...). Returns count added/updated. */
+int core_import_csv(const char *csv_text);
+
+/* Export accounts to CSV string with UTF-8 BOM for Excel/Google Sheets (caller must free).
+ * If indices is NULL or count <= 0, exports all accounts. */
+char *core_export_csv(const int *indices, int count);
 
 /* Delete accounts by array of indices (sorted or unsorted) */
 int core_delete_indices(const int *indices, int count);
