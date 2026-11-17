@@ -68,6 +68,11 @@ int core_extract_roblosecurity(const char *raw_cookies, char *out_cookie, size_t
 /* Build JavaScript auto-login snippet for WebView (caller must free) */
 char *core_build_login_js(const char *username, const char *password);
 
+/* Classify Roblox page state (WORK, BAN, VERIFY, CAPTCHA, BADPASS, 2FA, RATE, UNKNOWN)
+ * Updates account idx in DB and returns JSON string {"status":"...","note":"...","hasCookie":true/false} (caller must free) */
+char *core_classify_page(int idx, const char *url, const char *page_text,
+                         int has_arkose, const char *raw_cookies);
+
 #ifdef __cplusplus
 }
 #endif

@@ -50,6 +50,23 @@ static int str_icmp(const char *a, const char *b) {
     return tolower((unsigned char)*a) - tolower((unsigned char)*b);
 }
 
+/* Case-insensitive substring search in C */
+static int str_icontains(const char *haystack, const char *needle) {
+    if (!haystack || !needle || !*needle) return 0;
+    size_t nlen = strlen(needle);
+    for (; *haystack; haystack++) {
+        if (tolower((unsigned char)*haystack) == tolower((unsigned char)*needle)) {
+            size_t i = 1;
+            while (i < nlen && haystack[i] &&
+                   tolower((unsigned char)haystack[i]) == tolower((unsigned char)needle[i])) {
+                i++;
+            }
+            if (i == nlen) return 1;
+        }
+    }
+    return 0;
+}
+
 /* Minimal JSON string unescape & extraction helper */
 static const char *skip_ws(const char *p) {
     while (*p && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
@@ -137,7 +154,6 @@ int core_load_db(void) {
     while (*p && g_account_count < MAX_ACCOUNTS) {
         const char *obj_start = strchr(p, '{');
         if (!obj_start) break;
-        /* find matching '}' outside quotes */
         const char *q = obj_start + 1;
         int in_str = 0;
         while (*q) {
@@ -305,7 +321,6 @@ static int find_cookie_idx(const char *ck) {
     return -1;
 }
 
-/* Upsert account: updates existing if username or cookie matches, otherwise appends */
 static int upsert_account(const char *username, const char *password, const char *cookie,
                           const char *status, const char *created, const char *checked,
                           const char *note) {
@@ -359,14 +374,12 @@ int core_add_account(const char *username, const char *password, const char *coo
 
 int core_import_text(const char *text) {
     if (!text) return 0;
-    /* If it looks like a CSV file with header or commas, delegate to core_import_csv */
     if (strstr(text, "username,password") != NULL || strstr(text, "username\tpassword") != NULL) {
         return core_import_csv(text);
     }
     int added = 0;
     const char *p = text;
 
-    /* Skip UTF-8 BOM if present */
     if ((unsigned char)p[0] == 0xEF && (unsigned char)p[1] == 0xBB && (unsigned char)p[2] == 0xBF) {
         p += 3;
     }
@@ -380,7 +393,6 @@ int core_import_text(const char *text) {
         memcpy(line, p, len);
         line[len] = '\0';
 
-        /* Trim whitespace and quotes */
         char *s = line;
         while (*s && (*s == ' ' || *s == '\t' || *s == '"' || *s == '\'')) s++;
         size_t slen = strlen(s);
@@ -391,10 +403,8 @@ int core_import_text(const char *text) {
 
         if (slen > 0) {
             if (strncmp(s, "_|WARNING", 9) == 0) {
-                /* Raw .ROBLOSECURITY cookie only */
                 added += upsert_account("", "", s, "UNKNOWN", NULL, NULL, NULL);
             } else {
-                /* Support user:pass:_|WARNING... or user:pass or user,pass,cookie */
                 char *warn = strstr(s, "_|WARNING");
                 char ck_part[MAX_COOKIE] = "";
                 if (warn && warn > s && (*(warn - 1) == ':' || *(warn - 1) == ',' || *(warn - 1) == '\t')) {
@@ -428,7 +438,6 @@ int core_import_text(const char *text) {
     return added;
 }
 
-/* Parse a single CSV/TSV cell, advancing *cursor past the delimiter (',' or '\t') */
 static int parse_csv_cell(const char **cursor, char *out, size_t out_sz, char delim) {
     const char *p = *cursor;
     if (!p || !*p || *p == '\r' || *p == '\n') {
@@ -470,7 +479,6 @@ int core_import_csv(const char *csv_text) {
     if (!csv_text) return 0;
     const char *p = csv_text;
 
-    /* Skip UTF-8 BOM if present */
     if ((unsigned char)p[0] == 0xEF && (unsigned char)p[1] == 0xBB && (unsigned char)p[2] == 0xBF) {
         p += 3;
     }
@@ -483,7 +491,6 @@ int core_import_csv(const char *csv_text) {
         if (!*p) break;
 
         const char *line_start = p;
-        /* Detect delimiter on this line (comma vs tab) */
         const char *eol = line_start;
         int in_q = 0;
         int has_tab = 0, has_comma = 0;
@@ -496,7 +503,6 @@ int core_import_csv(const char *csv_text) {
         line_no++;
 
         if (!has_comma && !has_tab) {
-            /* Fallback: single line with colon or raw cookie */
             size_t llen = (size_t)(eol - line_start);
             char single[MAX_COOKIE + 512];
             if (llen >= sizeof(single)) llen = sizeof(single) - 1;
@@ -525,19 +531,16 @@ int core_import_csv(const char *csv_text) {
         parse_csv_cell(&cur, c_checked, sizeof(c_checked), delim);
         parse_csv_cell(&cur, c_note,    sizeof(c_note),    delim);
 
-        /* Skip header row */
         if (line_no == 1 && (str_icmp(c_user, "username") == 0 || str_icmp(c_user, "user") == 0 ||
                              str_icmp(c_user, "ชื่อ") == 0)) {
             p = eol;
             continue;
         }
 
-        /* If column 2 (password) is actually a cookie (_|WARNING), shift it */
         if (strncmp(c_pass, "_|WARNING", 9) == 0 && !c_cookie[0]) {
             safe_copy(c_cookie, sizeof(c_cookie), c_pass);
             c_pass[0] = '\0';
         }
-        /* If column 1 (username) is user:pass, split it */
         if (!c_pass[0] && strchr(c_user, ':') != NULL && strncmp(c_user, "_|WARNING", 9) != 0) {
             char *cl = strchr(c_user, ':');
             *cl = '\0';
@@ -562,7 +565,7 @@ int core_import_csv(const char *csv_text) {
 
 static size_t csv_cell_escaped_len(const char *s) {
     if (!s) return 2;
-    size_t n = 2; /* quotes */
+    size_t n = 2;
     for (; *s; s++) {
         if (*s == '"') n += 2;
         else n += 1;
@@ -612,7 +615,6 @@ char *core_export_csv(const int *indices, int count) {
     if (!out) return NULL;
     char *p = out;
 
-    /* UTF-8 BOM so Microsoft Excel and Google Sheets open Thai & UTF-8 cleanly */
     *p++ = (char)0xEF;
     *p++ = (char)0xBB;
     *p++ = (char)0xBF;
@@ -742,18 +744,61 @@ char *core_build_login_js(const char *username, const char *password) {
     }
     esc_p[pi] = '\0';
 
+    /*
+     * React 17/18 compatible input value setter + multi-strategy Log In button clicker.
+     * Resets el._valueTracker before calling native value setter so React state updates
+     * and enables the Log In button, then clicks the Log In button via pointer/mouse/click
+     * events and form.requestSubmit(), retrying if the button takes a moment to enable.
+     */
     const char *tmpl =
         "(function(){\n"
-        "  function setVal(el, v){\n"
+        "  if(window._roooAutoLoginRunning) return;\n"
+        "  window._roooAutoLoginRunning = true;\n"
+        "  function setReactValue(el, val){\n"
         "    if(!el) return false;\n"
-        "    try{ el.focus(); }catch(e){}\n"
+        "    try{ el.focus(); el.click(); }catch(e){}\n"
+        "    var last = el.value;\n"
         "    try{\n"
-        "      var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;\n"
-        "      setter.call(el, v);\n"
-        "    }catch(e){ el.value = v; }\n"
-        "    el.dispatchEvent(new Event('input', {bubbles:true}));\n"
+        "      var proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;\n"
+        "      var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;\n"
+        "      setter.call(el, val);\n"
+        "    }catch(e){ el.value = val; }\n"
+        "    try{\n"
+        "      var tracker = el._valueTracker;\n"
+        "      if(tracker) tracker.setValue(last);\n"
+        "    }catch(e){}\n"
+        "    try{ el.dispatchEvent(new InputEvent('input', {bubbles:true, cancelable:true, inputType:'insertText', data:val})); }catch(e){\n"
+        "      el.dispatchEvent(new Event('input', {bubbles:true}));\n"
+        "    }\n"
         "    el.dispatchEvent(new Event('change', {bubbles:true}));\n"
+        "    try{ el.blur(); }catch(e){}\n"
         "    return true;\n"
+        "  }\n"
+        "  function clickLoginBtn(){\n"
+        "    var pass = document.querySelector('#login-password, input[name=\"password\"], input[type=\"password\"]');\n"
+        "    var f = pass ? pass.closest('form') : null;\n"
+        "    var scope = f || document;\n"
+        "    var re = /^(sign in|signin|log in|login|เข้าสู่ระบบ)$/i;\n"
+        "    var reSub = /(sign in|signin|log in|login|เข้าสู่ระบบ)/i;\n"
+        "    var btn = document.querySelector('#login-button, button[data-testid=\"login-button\"]');\n"
+        "    if(!btn){\n"
+        "      var all = Array.from(scope.querySelectorAll('button, input[type=\"submit\"], [role=\"button\"]'));\n"
+        "      btn = all.find(function(b){ return (b.offsetWidth||b.offsetHeight) && re.test((b.innerText||b.value||'').trim()); })\n"
+        "         || all.find(function(b){ return (b.offsetWidth||b.offsetHeight) && reSub.test((b.innerText||b.value||'').trim()); })\n"
+        "         || scope.querySelector('button[type=\"submit\"]');\n"
+        "    }\n"
+        "    if(btn){\n"
+        "      try{ btn.disabled = false; btn.removeAttribute('disabled'); }catch(e){}\n"
+        "      ['pointerdown','mousedown','touchstart','pointerup','mouseup','touchend','click'].forEach(function(ev){\n"
+        "        try{ btn.dispatchEvent(new MouseEvent(ev, {bubbles:true, cancelable:true, view:window})); }catch(e){}\n"
+        "      });\n"
+        "      try{ btn.click(); }catch(e){}\n"
+        "      return true;\n"
+        "    }\n"
+        "    if(f){\n"
+        "      try{ if(f.requestSubmit) f.requestSubmit(); else f.submit(); return true; }catch(e){}\n"
+        "    }\n"
+        "    return false;\n"
         "  }\n"
         "  var tries = 0;\n"
         "  var timer = setInterval(function(){\n"
@@ -762,25 +807,125 @@ char *core_build_login_js(const char *username, const char *password) {
         "    var p = document.querySelector('#login-password, input[name=\"password\"], input[type=\"password\"]');\n"
         "    if(u && p){\n"
         "      clearInterval(timer);\n"
-        "      setVal(u, '%s');\n"
+        "      setReactValue(u, '%s');\n"
         "      setTimeout(function(){\n"
-        "        setVal(p, '%s');\n"
+        "        setReactValue(p, '%s');\n"
         "        setTimeout(function(){\n"
-        "          var btn = document.querySelector('#login-button, button[data-testid=\"login-button\"], button[type=\"submit\"]');\n"
-        "          if(btn && !btn.disabled) btn.click();\n"
-        "        }, 450);\n"
+        "          clickLoginBtn();\n"
+        "          var cTries = 0;\n"
+        "          var cTimer = setInterval(function(){\n"
+        "            cTries++;\n"
+        "            var bodyTxt = (document.body ? document.body.innerText : '').toLowerCase();\n"
+        "            if(cTries > 6 || !location.pathname.includes('login') || bodyTxt.includes('verify') || bodyTxt.includes('hold') || bodyTxt.includes('incorrect') || bodyTxt.includes('step')){\n"
+        "              clearInterval(cTimer);\n"
+        "              window._roooAutoLoginRunning = false;\n"
+        "              return;\n"
+        "            }\n"
+        "            if(u.value !== '%s') setReactValue(u, '%s');\n"
+        "            if(p.value !== '%s') setReactValue(p, '%s');\n"
+        "            clickLoginBtn();\n"
+        "          }, 1200);\n"
+        "        }, 400);\n"
         "      }, 350);\n"
         "    } else if(tries > 40){\n"
         "      clearInterval(timer);\n"
+        "      window._roooAutoLoginRunning = false;\n"
         "    }\n"
-        "  }, 400);\n"
+        "  }, 350);\n"
         "})();";
 
-    size_t total = strlen(tmpl) + strlen(esc_u) + strlen(esc_p) + 64;
+    size_t total = strlen(tmpl) + (strlen(esc_u) + strlen(esc_p)) * 3 + 128;
     char *js = (char *)malloc(total);
     if (!js) return NULL;
-    snprintf(js, total, tmpl, esc_u, esc_p);
+    snprintf(js, total, tmpl, esc_u, esc_p, esc_u, esc_u, esc_p, esc_p);
     return js;
+}
+
+char *core_classify_page(int idx, const char *url, const char *page_text,
+                         int has_arkose, const char *raw_cookies) {
+    char ck[MAX_COOKIE] = "";
+    int ck_len = core_extract_roblosecurity(raw_cookies, ck, sizeof(ck));
+
+    const char *u = url ? url : "";
+    const char *t = page_text ? page_text : "";
+
+    const char *status = "UNKNOWN";
+    const char *note = "กำลังตรวจสอบหน้าเว็บ...";
+
+    if (str_icontains(t, "banned your account") ||
+        str_icontains(t, "account has been banned") ||
+        str_icontains(t, "account was banned") ||
+        str_icontains(t, "permanently banned") ||
+        str_icontains(t, "this account has been banned") ||
+        str_icontains(t, "misusing roblox systems") ||
+        str_icontains(u, "not-approved")) {
+        status = "BAN";
+        note = "ไอดีถูกแบน / ระงับการใช้งาน (BAN)";
+    } else if (ck_len > 100) {
+        status = "WORK";
+        note = "ใช้งานได้ปกติ — ดึงและบันทึก Cookie สำเร็จแล้ว";
+    } else if (str_icontains(t, "press and hold") ||
+               str_icontains(t, "hold the button") ||
+               str_icontains(t, "verify you're human") ||
+               str_icontains(t, "verify you are human")) {
+        status = "VERIFY";
+        note = "ติด Verify (Press and hold) — กดค้างที่ปุ่มบนหน้าจอเพื่อยืนยัน";
+    } else if (str_icontains(t, "two-step") ||
+               str_icontains(t, "2-step") ||
+               str_icontains(t, "two step") ||
+               str_icontains(t, "verification code") ||
+               str_icontains(t, "enter the code") ||
+               str_icontains(t, "enter your code") ||
+               str_icontains(t, "security code")) {
+        status = "2FA";
+        note = "ติดรหัสยืนยัน 2 ชั้น (2FA / อีเมล)";
+    } else if (str_icontains(t, "incorrect username or password") ||
+               str_icontains(t, "username or password is incorrect") ||
+               str_icontains(t, "incorrect password") ||
+               str_icontains(t, "incorrect username") ||
+               str_icontains(t, "we couldn't find") ||
+               str_icontains(t, "doesn't exist") ||
+               str_icontains(t, "does not exist") ||
+               str_icontains(t, "invalid username")) {
+        status = "BADPASS";
+        note = "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง (BADPASS)";
+    } else if (str_icontains(t, "too many") ||
+               str_icontains(t, "try again later") ||
+               str_icontains(t, "throttl") ||
+               str_icontains(t, "slow down") ||
+               str_icontains(t, "please try again")) {
+        status = "RATE";
+        note = "ติด Rate Limit / Please try again (รอสักครู่หรือเปลี่ยนเน็ต)";
+    } else if (has_arkose ||
+               str_icontains(t, "account locked") ||
+               str_icontains(t, "account has been locked") ||
+               str_icontains(t, "verify your identity") ||
+               str_icontains(t, "complete the challenge") ||
+               str_icontains(t, "suspicious activity") ||
+               str_icontains(u, "challenge")) {
+        status = "CAPTCHA";
+        note = "ติด Captcha / ตัวต่อปริศนา หรือไอดีถูกล็อก";
+    } else if (str_icontains(u, "/home") || str_icontains(u, "/discover") || str_icontains(u, "/charts")) {
+        status = "WORK";
+        note = "เข้าหน้า Home สำเร็จ";
+    }
+
+    if (idx >= 0 && idx < g_account_count) {
+        if (ck_len > 100) {
+            core_store_cookie(idx, g_accounts[idx].username, ck, status, note);
+        } else if (strcmp(status, "UNKNOWN") != 0) {
+            core_update_status(idx, status, note);
+        }
+    }
+
+    char *out = (char *)malloc(1024);
+    if (!out) return NULL;
+    char *p = out;
+    *p++ = '{';
+    p = append_json_kv(p, "status", status, 1);
+    p = append_json_kv(p, "note", note, 1);
+    p += sprintf(p, "\"hasCookie\":%s}", (ck_len > 100) ? "true" : "false");
+    return out;
 }
 
 /* =========================================================================
@@ -805,6 +950,13 @@ Java_com_rooo_dashboard_NativeBridge_getAccountsJson(JNIEnv *env, jclass clazz) 
     jstring res = (*env)->NewStringUTF(env, json);
     free(json);
     return res;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_rooo_dashboard_NativeBridge_getAccountCount(JNIEnv *env, jclass clazz) {
+    (void)env;
+    (void)clazz;
+    return core_get_count();
 }
 
 JNIEXPORT jint JNICALL
@@ -938,6 +1090,28 @@ Java_com_rooo_dashboard_NativeBridge_buildLoginJs(JNIEnv *env, jclass clazz, jin
     if (!js) return (*env)->NewStringUTF(env, "");
     jstring res = (*env)->NewStringUTF(env, js);
     free(js);
+    return res;
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_rooo_dashboard_NativeBridge_classifyPage(JNIEnv *env, jclass clazz,
+                                                  jint idx, jstring jurl,
+                                                  jstring jpageText, jboolean hasArkose,
+                                                  jstring jrawCookies) {
+    (void)clazz;
+    const char *url = jurl ? (*env)->GetStringUTFChars(env, jurl, NULL) : "";
+    const char *txt = jpageText ? (*env)->GetStringUTFChars(env, jpageText, NULL) : "";
+    const char *ck  = jrawCookies ? (*env)->GetStringUTFChars(env, jrawCookies, NULL) : "";
+
+    char *json = core_classify_page((int)idx, url, txt, hasArkose ? 1 : 0, ck);
+
+    if (jurl)        (*env)->ReleaseStringUTFChars(env, jurl, url);
+    if (jpageText)   (*env)->ReleaseStringUTFChars(env, jpageText, txt);
+    if (jrawCookies) (*env)->ReleaseStringUTFChars(env, jrawCookies, ck);
+
+    if (!json) return (*env)->NewStringUTF(env, "{\"status\":\"UNKNOWN\",\"note\":\"\",\"hasCookie\":false}");
+    jstring res = (*env)->NewStringUTF(env, json);
+    free(json);
     return res;
 }
 

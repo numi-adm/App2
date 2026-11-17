@@ -13,11 +13,12 @@ button{background:#2d7ff9;border:none;color:#fff;padding:9px 14px;border-radius:
 button:active{opacity:0.8;transform:scale(0.98)}
 button.ghost{background:#444}
 button.sheet{background:#1d7a34}
+button.check{background:#6b47dc}
 button.danger{background:#a02828}
 button:disabled{background:#555;cursor:default}
 input,select,textarea{background:#2a2a2a;color:#eee;border:1px solid #555;border-radius:8px;padding:8px 10px;font-size:13px}
 .table-wrap{width:100%;overflow-x:auto;background:#242424;border-radius:10px;border:1px solid #333}
-table{width:100%;border-collapse:collapse;font-size:13px;min-width:520px}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:540px}
 th,td{border-bottom:1px solid #333;padding:10px 8px;text-align:left;vertical-align:top}
 th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
 .badge{padding:3px 10px;border-radius:10px;font-size:11px;white-space:nowrap;display:inline-block;font-weight:600}
@@ -42,6 +43,8 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
 </h1>
 
 <div class="bar">
+  <button class="check" onclick="checkSel()">🔍 เช็คที่เลือก</button>
+  <button class="check" onclick="checkAll()">🔍 เช็คทั้งหมด</button>
   <button onclick="openSel()">เปิดที่เลือก</button>
   <button onclick="manualOpen()">เปิดหน้าต่างเอง</button>
   <button onclick="dumpSel()">ดึง cookie ที่เลือก</button>
@@ -73,8 +76,8 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
 </div>
 
 <div class="note" style="margin-bottom:10px;background:#252525;padding:10px;border-radius:8px">
-  • ไอดีที่ติด <b>Verify you're human</b> → หน้าต่าง Roblox ในแอปจะเปิดค้างไว้ให้กด <b>Press and hold</b> เอง แล้วกด <b>ดึง cookie จากหน้าต่างที่เปิด</b> · <b>ห้ามกด Logout</b><br>
-  • <b>นำเข้า / ส่งออก Sheet (.csv)</b> = รองรับไฟล์ตาราง Excel / Google Sheets แยกคอลัมน์ <code>username, password, cookie, status</code> (ถ้าติ๊กเลือกไอดีไว้จะส่งออกเฉพาะที่เลือก ถ้าไม่ติ๊กจะส่งออกทั้งหมด)
+  • <b>กรอกรหัส + กดปุ่ม Log In ให้อัตโนมัติ</b> และมีระบบ<b>ตรวจจับสถานะอัตโนมัติ</b>ว่าติดอะไร (`WORK`, `VERIFY Press & Hold`, `CAPTCHA`, `2FA`, `BADPASS`, `BAN`, `RATE`)<br>
+  • เมื่อกดปุ่มสีแดง <b>"ปิด / ถัดไป ⏭"</b> ด้านบนของหน้าต่าง Roblox ระบบจะเซฟ Cookie (ถ้ามี) แล้ว<b>เปิดไอดีถัดไปให้ทันทีโดยอัตโนมัติ</b> (หากต้องการหยุดคิวกลับหน้าแรกให้กดปุ่ม <b>"หน้าหลัก"</b>)
 </div>
 
 <div class="table-wrap">
@@ -86,7 +89,7 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
       <th>ชื่อ:รหัส</th>
       <th>cookie (ดึงจากล็อกอิน)</th>
       <th>สร้าง / เช็คล่าสุด</th>
-      <th>สถานะ</th>
+      <th>สถานะ (ติดอะไร)</th>
       <th>จัดการ</th>
     </tr>
   </thead>
@@ -133,7 +136,7 @@ function nativeDispatch(path, data) {
       return JSON.parse(window.NativeApp.getAccountsJson() || '[]');
     }
     if (path === '/api/live') {
-      return JSON.parse(window.NativeApp.getLiveStatus() || '{"open":[],"manual":[]}');
+      return JSON.parse(window.NativeApp.getLiveStatus() || '{"open":[],"manual":[],"queue":0}');
     }
     if (path === '/api/add') {
       window.NativeApp.addAccount(data.username || '', data.password || '');
@@ -155,10 +158,13 @@ function nativeDispatch(path, data) {
       window.NativeApp.deleteIndices(JSON.stringify(data.indices || []));
       return {ok: true};
     }
+    if (path === '/api/check') {
+      window.NativeApp.checkAccountsQueue(JSON.stringify(data.indices || []));
+      return {ok: true};
+    }
     if (path === '/api/open') {
-      const idx = (data.indices && data.indices.length) ? data.indices[0] : -1;
-      window.NativeApp.openAccount(idx, !!data.incognito);
-      return {ok: true, opened: idx >= 0 ? [idx] : [], failed: []};
+      window.NativeApp.openAccountsQueue(JSON.stringify(data.indices || []), !!data.incognito);
+      return {ok: true, opened: data.indices || [], failed: []};
     }
     if (path === '/api/manual_open') {
       const idx = (typeof data.index === 'number') ? data.index : -1;
@@ -166,8 +172,7 @@ function nativeDispatch(path, data) {
       return {ok: true, port: 'WebView'};
     }
     if (path === '/api/dump') {
-      const idx = (data.indices && data.indices.length) ? data.indices[0] : -1;
-      window.NativeApp.dumpCookie(idx);
+      window.NativeApp.dumpCookiesQueue(JSON.stringify(data.indices || []));
       return {ok: true, job: 'native'};
     }
     if (path === '/api/grab') {
@@ -219,7 +224,10 @@ async function load() {
     const lv = await api('/api/live');
     if ($('lstat')) {
       const openCnt = (lv.open || []).length + (lv.manual || []).length;
-      $('lstat').textContent = openCnt ? ('หน้าต่างเปิดอยู่ ' + openCnt) : 'พร้อมใช้งาน (C Core)';
+      const qCnt = lv.queue || 0;
+      $('lstat').textContent = openCnt
+        ? ('เปิดอยู่ ' + openCnt + (qCnt ? ' · คิวรอ ' + qCnt : ''))
+        : 'พร้อมใช้งาน (C Core)';
     }
   } catch (e) {}
 
@@ -243,6 +251,7 @@ async function load() {
       <td>${badge(r.status || 'UNKNOWN')}${r.note ? `<span class="note">${esc(r.note)}</span>` : ''}</td>
       <td>
         <div class="row-actions">
+          <button class="check" onclick="one(${i},'check')">เช็ค</button>
           <button onclick="one(${i},'open')">เปิด</button>
           <button onclick="manualOpen(${i})">เปิดเอง</button>
           <button onclick="dumpOne(${i})">ดึง cookie</button>
@@ -254,7 +263,27 @@ async function load() {
 }
 
 async function one(i, act) {
-  await api('/api/open', {indices: [i], incognito: $('incog').checked});
+  if (act === 'check') {
+    await api('/api/check', {indices: [i]});
+  } else {
+    await api('/api/open', {indices: [i], incognito: $('incog').checked});
+  }
+  load();
+}
+
+async function checkSel() {
+  const i = selIdx();
+  if (!i.length) return alert('เลือกไอดีก่อน');
+  $('dlog').textContent = 'กำลังเช็คสถานะทีละไอดี...';
+  await api('/api/check', {indices: i});
+  load();
+}
+
+async function checkAll() {
+  if (!rows.length) return alert('ยังไม่มีไอดี');
+  const all = rows.map((_, i) => i);
+  $('dlog').textContent = 'กำลังเช็คสถานะทั้งหมด (' + all.length + ' ไอดี)...';
+  await api('/api/check', {indices: all});
   load();
 }
 
@@ -289,7 +318,7 @@ async function manualOpen(i) {
   if (typeof i === 'number') d.index = i;
   const j = await api('/api/manual_open', d);
   if (j && j.ok === false) return alert('เปิดไม่ได้: ' + j.error);
-  $('dlog').textContent = 'เปิดหน้าต่าง Roblox แล้ว — ล็อกอินเสร็จแล้วกด "ดึง cookie จากหน้าต่างที่เปิด"';
+  $('dlog').textContent = 'เปิดหน้าต่าง Roblox แล้ว — ล็อกอินเสร็จแล้วกด "ดึง cookie" หรือ "ปิด / ถัดไป ⏭"';
   load();
 }
 
@@ -387,7 +416,7 @@ async function dumpOne(i) {
 async function dumpSel() {
   const i = selIdx();
   if (!i.length) return alert('เลือกไอดีก่อน');
-  $('dlog').textContent = 'กำลังดึง cookie ที่เลือก...';
+  $('dlog').textContent = 'กำลังดึง cookie ที่เลือก (' + i.length + ' ไอดี)...';
   await api('/api/dump', {indices: i, incognito: true});
   load();
 }

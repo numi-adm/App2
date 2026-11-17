@@ -9,6 +9,8 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -27,6 +29,7 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -34,7 +37,9 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 
 public class MainActivity extends Activity {
@@ -42,10 +47,28 @@ public class MainActivity extends Activity {
     private static final int REQ_FILE_CHOOSER = 1001;
     private static final int REQ_SAVE_CSV = 1002;
 
+    private static final String JS_INSPECT_PAGE =
+            "(function(){" +
+            "  var txt = document.body ? (document.body.innerText || '') : '';" +
+            "  try {" +
+            "    document.querySelectorAll('*').forEach(function(el){" +
+            "      if(el.shadowRoot) txt += '\\n' + (el.shadowRoot.innerText || el.shadowRoot.textContent || '');" +
+            "    });" +
+            "  } catch(e){}" +
+            "  var ark = false;" +
+            "  try {" +
+            "    ark = Array.from(document.querySelectorAll('iframe')).some(function(f){" +
+            "      return /arkose|funcaptcha|captcha/i.test(f.src || '') && (f.offsetWidth > 0 || f.offsetHeight > 0);" +
+            "    });" +
+            "  } catch(e){}" +
+            "  return JSON.stringify({url: location.href, text: txt.slice(0, 3000), arkose: ark});" +
+            "})();";
+
     private WebView dashWebView;
     private WebView robloxWebView;
     private LinearLayout browserContainer;
     private TextView browserTitle;
+    private TextView browserStatusBadge;
 
     private ValueCallback<Uri[]> fileUploadCallback;
     private String pendingCsvExport = "";
@@ -53,6 +76,24 @@ public class MainActivity extends Activity {
     private int activeAccountIdx = -1;
     private boolean autoFillPending = false;
     private boolean browserOpen = false;
+    private boolean currentCleanSession = true;
+    private boolean currentAutoFill = true;
+    private boolean autoCheckMode = false;
+
+    private final List<Integer> accountQueue = new ArrayList<>();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private long accountOpenedAt = 0;
+
+    private final Runnable liveInspectorRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!browserOpen || browserContainer.getVisibility() != View.VISIBLE) {
+                return;
+            }
+            inspectCurrentRobloxPage();
+            mainHandler.postDelayed(this, 1600);
+        }
+    };
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -113,40 +154,53 @@ public class MainActivity extends Activity {
         browserContainer.setBackgroundColor(Color.parseColor("#181818"));
         browserContainer.setVisibility(View.GONE);
 
-        // Top toolbar for the in-app Roblox browser
+        // Top toolbar row 1: Account title & action buttons
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
         topBar.setBackgroundColor(Color.parseColor("#262626"));
-        int pad = dp(8);
+        int pad = dp(6);
         topBar.setPadding(pad, pad, pad, pad);
 
+        LinearLayout titleCol = new LinearLayout(this);
+        titleCol.setOrientation(LinearLayout.VERTICAL);
         browserTitle = new TextView(this);
         browserTitle.setTextColor(Color.WHITE);
         browserTitle.setTextSize(13f);
         browserTitle.setText("Roblox Browser");
+        titleCol.addView(browserTitle);
+
+        browserStatusBadge = new TextView(this);
+        browserStatusBadge.setTextColor(Color.parseColor("#99ccff"));
+        browserStatusBadge.setTextSize(11f);
+        browserStatusBadge.setText("กำลังโหลดและเช็คสถานะ...");
+        titleCol.addView(browserStatusBadge);
+
         LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        topBar.addView(browserTitle, titleLp);
+        topBar.addView(titleCol, titleLp);
 
         Button btnGrab = makeBarButton("ดึง Cookie", "#1d7a34");
         btnGrab.setOnClickListener(v -> {
             int got = grabCookieInternal();
             if (got > 0) {
+                browserStatusBadge.setText("สถานะ: WORK (บันทึก Cookie แล้ว!)");
+                browserStatusBadge.setTextColor(Color.parseColor("#44ff77"));
                 notifyDashboard("ดึง cookie สำเร็จ!");
             } else {
-                notifyDashboard("ยังไม่มี cookie — ล็อกอินให้เสร็จก่อน");
+                inspectCurrentRobloxPage();
+                notifyDashboard("ยังไม่มี cookie — เช็คสถานะบนแถบด้านบน");
             }
         });
         topBar.addView(btnGrab);
 
-        Button btnHide = makeBarButton("ย่อหน้าต่าง", "#444444");
-        btnHide.setOnClickListener(v -> browserContainer.setVisibility(View.GONE));
-        topBar.addView(btnHide);
+        Button btnStopAll = makeBarButton("หน้าหลัก", "#444444");
+        btnStopAll.setOnClickListener(v -> stopQueueAndCloseBrowser());
+        topBar.addView(btnStopAll);
 
-        Button btnClose = makeBarButton("ปิด", "#a02828");
-        btnClose.setOnClickListener(v -> closeRobloxBrowser());
-        topBar.addView(btnClose);
+        Button btnCloseNext = makeBarButton("ปิด / ถัดไป ⏭", "#a02828");
+        btnCloseNext.setOnClickListener(v -> closeAndOpenNextAccount());
+        topBar.addView(btnCloseNext);
 
         browserContainer.addView(topBar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -179,6 +233,7 @@ public class MainActivity extends Activity {
                         view.evaluateJavascript(js, null);
                     }
                 }
+                mainHandler.postDelayed(() -> inspectCurrentRobloxPage(), 600);
             }
         });
 
@@ -190,6 +245,71 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT));
 
         setContentView(root);
+    }
+
+    private void inspectCurrentRobloxPage() {
+        if (!browserOpen || activeAccountIdx < 0) return;
+
+        final int idx = activeAccountIdx;
+        robloxWebView.evaluateJavascript(JS_INSPECT_PAGE, value -> {
+            if (!browserOpen || activeAccountIdx != idx) return;
+            String url = robloxWebView.getUrl() != null ? robloxWebView.getUrl() : "";
+            String pageText = "";
+            boolean hasArkose = false;
+
+            try {
+                if (value != null && value.length() > 2 && !value.equals("null")) {
+                    // Unwrap JSON string returned by evaluateJavascript
+                    String rawJson = value;
+                    if (rawJson.startsWith("\"") && rawJson.endsWith("\"")) {
+                        rawJson = new org.json.JSONTokener(rawJson).nextValue().toString();
+                    }
+                    JSONObject obj = new JSONObject(rawJson);
+                    url = obj.optString("url", url);
+                    pageText = obj.optString("text", "");
+                    hasArkose = obj.optBoolean("arkose", false);
+                }
+            } catch (Exception ignored) {
+            }
+
+            CookieManager cm = CookieManager.getInstance();
+            String c1 = cm.getCookie("https://www.roblox.com");
+            String c2 = cm.getCookie("https://roblox.com");
+            String combinedCookies = (c1 != null ? c1 : "") + "; " + (c2 != null ? c2 : "");
+
+            String resJson = NativeBridge.classifyPage(idx, url, pageText, hasArkose, combinedCookies);
+            try {
+                JSONObject res = new JSONObject(resJson);
+                String st = res.optString("status", "UNKNOWN");
+                String note = res.optString("note", "");
+                boolean hasCk = res.optBoolean("hasCookie", false);
+
+                if (hasCk) {
+                    browserStatusBadge.setText("สถานะ: " + st + " — " + note);
+                    browserStatusBadge.setTextColor(Color.parseColor("#44ff77"));
+                    notifyDashboard(null);
+                    if (autoCheckMode && (System.currentTimeMillis() - accountOpenedAt > 1800)) {
+                        mainHandler.postDelayed(this::closeAndOpenNextAccount, 700);
+                    }
+                } else if (!st.equals("UNKNOWN")) {
+                    browserStatusBadge.setText("สถานะ: " + st + " — " + note);
+                    if (st.equals("BAN") || st.equals("BADPASS")) {
+                        browserStatusBadge.setTextColor(Color.parseColor("#ff6666"));
+                        notifyDashboard(null);
+                        if (autoCheckMode && (System.currentTimeMillis() - accountOpenedAt > 2200)) {
+                            mainHandler.postDelayed(this::closeAndOpenNextAccount, 900);
+                        }
+                    } else if (st.equals("VERIFY") || st.equals("CAPTCHA") || st.equals("2FA") || st.equals("RATE")) {
+                        browserStatusBadge.setTextColor(Color.parseColor("#ffcc44"));
+                        notifyDashboard(null);
+                    }
+                } else {
+                    browserStatusBadge.setText("กำลังล็อกอิน / ตรวจสอบสถานะ...");
+                    browserStatusBadge.setTextColor(Color.parseColor("#99ccff"));
+                }
+            } catch (Exception ignored) {
+            }
+        });
     }
 
     @Override
@@ -224,12 +344,15 @@ public class MainActivity extends Activity {
         Button b = new Button(this);
         b.setText(text);
         b.setTextColor(Color.WHITE);
-        b.setTextSize(12f);
+        b.setTextSize(11.5f);
         b.setBackgroundColor(Color.parseColor(hexColor));
+        int hp = dp(8);
+        int vp = dp(4);
+        b.setPadding(hp, vp, hp, vp);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.leftMargin = dp(6);
+        lp.leftMargin = dp(5);
         b.setLayoutParams(lp);
         return b;
     }
@@ -262,18 +385,53 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void startAccountQueue(int[] idxs, boolean cleanSession, boolean autoFill, boolean isCheckMode) {
+        accountQueue.clear();
+        int total = NativeBridge.getAccountCount();
+        if (idxs != null && idxs.length > 0) {
+            for (int i : idxs) {
+                if (i >= 0 && i < total) accountQueue.add(i);
+            }
+            // If user clicked a single row button (e.g. row #1), queue subsequent rows so "ปิด / ถัดไป" opens #2, #3...
+            if (idxs.length == 1 && idxs[0] >= 0) {
+                for (int next = idxs[0] + 1; next < total; next++) {
+                    accountQueue.add(next);
+                }
+            }
+        }
+        currentCleanSession = cleanSession;
+        currentAutoFill = autoFill;
+        autoCheckMode = isCheckMode;
+
+        if (!accountQueue.isEmpty()) {
+            int first = accountQueue.remove(0);
+            openAccountInWebView(first, cleanSession, autoFill);
+        } else {
+            openAccountInWebView(-1, cleanSession, false);
+        }
+    }
+
     private void openAccountInWebView(int idx, boolean cleanSession, boolean autoFill) {
         activeAccountIdx = idx;
         browserOpen = true;
+        accountOpenedAt = System.currentTimeMillis();
+
+        int total = NativeBridge.getAccountCount();
         String user = idx >= 0 ? NativeBridge.getAccountField(idx, "username") : "";
         String cookie = idx >= 0 ? NativeBridge.getAccountField(idx, "cookie") : "";
 
-        browserTitle.setText(user != null && !user.isEmpty()
-                ? ("ไอดี: " + user) : "Roblox Login (โหมดเปิดเอง)");
+        String qInfo = !accountQueue.isEmpty() ? (" [เหลือคิวอีก " + accountQueue.size() + "]") : "";
+        browserTitle.setText(idx >= 0
+                ? ("#" + (idx + 1) + "/" + total + " " + user + qInfo)
+                : "Roblox Login (โหมดเปิดเอง)");
+        browserStatusBadge.setText("กำลังเตรียมเซสชันและกรอกรหัส...");
+        browserStatusBadge.setTextColor(Color.parseColor("#99ccff"));
         browserContainer.setVisibility(View.VISIBLE);
 
+        mainHandler.removeCallbacks(liveInspectorRunnable);
+
         Runnable launch = () -> {
-            if (!autoFill && cookie != null && cookie.length() > 100) {
+            if (cookie != null && cookie.length() > 100) {
                 CookieManager cm = CookieManager.getInstance();
                 cm.setCookie("https://www.roblox.com",
                         ".ROBLOSECURITY=" + cookie + "; Domain=.roblox.com; Path=/; Secure; HttpOnly");
@@ -284,6 +442,7 @@ public class MainActivity extends Activity {
                 autoFillPending = autoFill && (idx >= 0);
                 robloxWebView.loadUrl("https://www.roblox.com/login");
             }
+            mainHandler.postDelayed(liveInspectorRunnable, 1500);
         };
 
         if (cleanSession) {
@@ -305,19 +464,44 @@ public class MainActivity extends Activity {
         return savedIdx >= 0 ? 1 : 0;
     }
 
-    private void closeRobloxBrowser() {
+    /* Called when user presses "ปิด / ถัดไป ⏭": grabs any cookie first, then opens next account in queue! */
+    private void closeAndOpenNextAccount() {
+        grabCookieInternal();
+        notifyDashboard(null);
+
+        if (!accountQueue.isEmpty()) {
+            int nextIdx = accountQueue.remove(0);
+            openAccountInWebView(nextIdx, currentCleanSession, currentAutoFill);
+        } else {
+            stopQueueAndCloseBrowser();
+            notifyDashboard("ครบทุกไอดีในคิวแล้ว!");
+        }
+    }
+
+    private void stopQueueAndCloseBrowser() {
+        grabCookieInternal();
+        accountQueue.clear();
         browserOpen = false;
         autoFillPending = false;
+        autoCheckMode = false;
+        mainHandler.removeCallbacks(liveInspectorRunnable);
         robloxWebView.loadUrl("about:blank");
         browserContainer.setVisibility(View.GONE);
+        notifyDashboard(null);
     }
 
     private void notifyDashboard(String msg) {
         runOnUiThread(() -> {
-            String safe = msg.replace("\\", "\\\\").replace("'", "\\'");
-            dashWebView.evaluateJavascript(
-                    "if(window.onNativeCookieUpdate) window.onNativeCookieUpdate('" + safe + "');",
-                    null);
+            if (msg == null) {
+                dashWebView.evaluateJavascript(
+                        "if(window.onNativeCookieUpdate) window.onNativeCookieUpdate('');",
+                        null);
+            } else {
+                String safe = msg.replace("\\", "\\\\").replace("'", "\\'");
+                dashWebView.evaluateJavascript(
+                        "if(window.onNativeCookieUpdate) window.onNativeCookieUpdate('" + safe + "');",
+                        null);
+            }
         });
     }
 
@@ -327,7 +511,7 @@ public class MainActivity extends Activity {
             if (robloxWebView.canGoBack()) {
                 robloxWebView.goBack();
             } else {
-                browserContainer.setVisibility(View.GONE);
+                stopQueueAndCloseBrowser();
             }
             return;
         }
@@ -343,9 +527,9 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public String getLiveStatus() {
             if (browserOpen) {
-                return "{\"open\":[" + Math.max(0, activeAccountIdx) + "],\"manual\":[]}";
+                return "{\"open\":[" + Math.max(0, activeAccountIdx) + "],\"manual\":[],\"queue\":" + accountQueue.size() + "}";
             }
-            return "{\"open\":[],\"manual\":[]}";
+            return "{\"open\":[],\"manual\":[],\"queue\":0}";
         }
 
         @JavascriptInterface
@@ -404,18 +588,27 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public void openAccount(int idx, boolean incognito) {
-            runOnUiThread(() -> openAccountInWebView(idx, incognito, true));
+        public void openAccountsQueue(String jsonIndices, boolean incognito) {
+            int[] idxs = parseIntArray(jsonIndices);
+            runOnUiThread(() -> startAccountQueue(idxs, incognito, true, false));
+        }
+
+        @JavascriptInterface
+        public void checkAccountsQueue(String jsonIndices) {
+            int[] idxs = parseIntArray(jsonIndices);
+            runOnUiThread(() -> startAccountQueue(idxs, true, true, true));
         }
 
         @JavascriptInterface
         public void manualOpen(int idx, boolean incognito) {
-            runOnUiThread(() -> openAccountInWebView(idx, incognito, false));
+            int[] idxs = idx >= 0 ? new int[]{idx} : null;
+            runOnUiThread(() -> startAccountQueue(idxs, incognito, false, false));
         }
 
         @JavascriptInterface
-        public void dumpCookie(int idx) {
-            runOnUiThread(() -> openAccountInWebView(idx, true, true));
+        public void dumpCookiesQueue(String jsonIndices) {
+            int[] idxs = parseIntArray(jsonIndices);
+            runOnUiThread(() -> startAccountQueue(idxs, true, true, false));
         }
 
         @JavascriptInterface
@@ -425,7 +618,7 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void closeBrowser() {
-            runOnUiThread(MainActivity.this::closeRobloxBrowser);
+            runOnUiThread(MainActivity.this::stopQueueAndCloseBrowser);
         }
 
         @JavascriptInterface
