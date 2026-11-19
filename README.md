@@ -17,6 +17,7 @@
 - **ปุ่ม `↻ ลองใหม่`** — ทำซ้ำคำสั่งล่าสุด (เช็ค cookie / ตรวจรหัส / ดึง cookie) และในหน้าต่าง Roblox มีปุ่ม **ลองใหม่** สำหรับเริ่มไอดีปัจจุบันใหม่ (ล้างเซสชันแล้วกรอก/เช็คอีกรอบ)
 - **สถานะใหม่ `RECOVERY`** — ตรวจจับหน้าที่ติด Recovery / กู้บัญชี / ยืนยันตัวตน (อีเมล, รหัสกู้คืน, ใช้เครื่องอื่น)
 - **สถานะใหม่ `LOCKED` + แจ้งเตือน** — หน้า "Account locked / suspicious activity / Confirm you're a human" จะขึ้นป้าย `LOCKED` และเด้งแจ้งเตือน "ไอดีถูกล็อก — กด Continue แล้วยืนยันว่าเป็นคนในหน้าต่าง" (ไม่ปิดหน้าต่าง/ไม่ข้ามไอดี)
+- **แก้บั๊ก "ดึง cookie แล้วขึ้น WORK ทั้งที่โดนล็อก"** — ปุ่มดึง cookie จะไม่ทับสถานะ `LOCKED`/`BAN`/`VERIFY`/`RECOVERY`/`CAPTCHA`/`2FA` ด้วย `WORK` อีก และตัวตรวจหน้าจะอ่านข้อความในกล่องข้อความ (dialog/modal), shadow DOM และ iframe ด้วย จึงจับ "Account locked" ได้แม้ข้อความอยู่ท้ายหน้า
 - **แก้บั๊ก "รหัสไม่ตรงไม่ขึ้น"** — เดิมถ้า Roblox ให้ cookie ของ guest หลังล็อกอินพลาด ระบบจะเข้าใจว่า WORK และข้ามไอดีไป; ตอนนี้ตรวจหน้า /login + ข้อความ error (incorrect / username and/or password / ไม่ถูกต้อง) ให้เป็น `BADPASS` ก่อน และไม่บันทึก cookie ของ guest ลงฐานข้อมูล
 - **นำเข้าไฟล์ Sheet (.csv)** ที่มีคอลัมน์ `username,password,cookie,status,created,checked,note` — รหัสผ่านถูกเก็บลง `accounts.json` ด้วย
 - **ปุ่ม `🍪 เช็ค cookie (ที่เลือก)` / `🍪 ทั้งหมด`** — เอา cookie ไปถาม `users.roblox.com/v1/users/authenticated` ว่าเป็นบัญชีไหน แล้วเทียบกับชื่อในชีต (ทำในแอป ไม่ต้องเปิด Roblox WebView และไม่ต้องเปิดเบราว์เซอร์)

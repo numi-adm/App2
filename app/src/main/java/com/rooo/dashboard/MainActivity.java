@@ -49,19 +49,37 @@ public class MainActivity extends Activity {
 
     private static final String JS_INSPECT_PAGE =
             "(function(){" +
-            "  var txt = document.body ? (document.body.innerText || '') : '';" +
+            "  function deep(el, depth){" +
+            "    var out = '';" +
+            "    if(!el || depth > 3) return out;" +
+            "    try { out += (el.innerText || el.textContent || '') + '\\n'; } catch(e){}" +
+            "    try { if(el.shadowRoot) out += deep(el.shadowRoot, depth + 1); } catch(e){}" +
+            "    return out;" +
+            "  }" +
+            "  var dlg = '';" +
             "  try {" +
-            "    document.querySelectorAll('*').forEach(function(el){" +
-            "      if(el.shadowRoot) txt += '\\n' + (el.shadowRoot.innerText || el.shadowRoot.textContent || '');" +
+            "    var sels = ['[role=\"dialog\"]','[class*=modal]','[class*=Modal]','[data-testid*=modal]'];" +
+            "    sels.forEach(function(s){" +
+            "      try {" +
+            "        document.querySelectorAll(s).forEach(function(el){ dlg += deep(el, 0) + '\\n'; });" +
+            "      } catch(e){}" +
             "    });" +
             "  } catch(e){}" +
+            "  try {" +
+            "    Array.from(document.querySelectorAll('iframe')).forEach(function(f){" +
+            "      try { var d = f.contentDocument; if(d && d.body) dlg += deep(d.body, 0) + '\\n'; } catch(e){}" +
+            "    });" +
+            "  } catch(e){}" +
+            "  var txt = '';" +
+            "  try { txt = deep(document.body, 0); } catch(e){}" +
             "  var ark = false;" +
             "  try {" +
             "    ark = Array.from(document.querySelectorAll('iframe')).some(function(f){" +
             "      return /arkose|funcaptcha|captcha/i.test(f.src || '') && (f.offsetWidth > 0 || f.offsetHeight > 0);" +
             "    });" +
             "  } catch(e){}" +
-            "  return JSON.stringify({url: location.href, text: txt.slice(0, 3000), arkose: ark});" +
+            "  var all = dlg + '\\n' + txt;" +
+            "  return JSON.stringify({url: location.href, text: all.slice(0, 12000), arkose: ark});" +
             "})();";
 
     private WebView dashWebView;
@@ -80,6 +98,9 @@ public class MainActivity extends Activity {
     private boolean currentAutoFill = true;
     private boolean autoCheckMode = false;
     private String noticedStatus = "";
+    private String lastStatus = "";
+    private String lastNote = "";
+    private String lastGrabStatus = "";
 
     private final List<Integer> accountQueue = new ArrayList<>();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -185,9 +206,15 @@ public class MainActivity extends Activity {
         btnGrab.setOnClickListener(v -> {
             int got = grabCookieInternal();
             if (got > 0) {
-                browserStatusBadge.setText("สถานะ: WORK (บันทึก Cookie แล้ว!)");
-                browserStatusBadge.setTextColor(Color.parseColor("#44ff77"));
-                notifyDashboard("ดึง cookie สำเร็จ!");
+                boolean ok = "WORK".equals(lastGrabStatus);
+                browserStatusBadge.setText("สถานะ: " + lastGrabStatus + " (บันทึก Cookie แล้ว)");
+                browserStatusBadge.setTextColor(Color.parseColor(ok ? "#44ff77" : "#ff8844"));
+                if (ok) {
+                    notifyDashboard("ดึง cookie สำเร็จ!");
+                } else {
+                    notifyDashboard("บันทึก cookie แล้ว แต่สถานะคือ " + lastGrabStatus
+                            + " — " + (lastNote != null && lastNote.length() > 0 ? lastNote : "กด Continue/ยืนยันในหน้าต่างก่อน"));
+                }
             } else {
                 inspectCurrentRobloxPage();
                 notifyDashboard("ยังไม่มี cookie — เช็คสถานะบนแถบด้านบน");
@@ -288,12 +315,14 @@ public class MainActivity extends Activity {
                 String st = res.optString("status", "UNKNOWN");
                 String note = res.optString("note", "");
                 boolean hasCk = res.optBoolean("hasCookie", false);
+                lastStatus = st;
+                lastNote = note;
 
                 if (hasCk) {
                     browserStatusBadge.setText("สถานะ: " + st + " — " + note);
                     browserStatusBadge.setTextColor(Color.parseColor("#44ff77"));
                     notifyDashboard(null);
-                    if (autoCheckMode && (System.currentTimeMillis() - accountOpenedAt > 1800)) {
+                    if (autoCheckMode && (System.currentTimeMillis() - accountOpenedAt > 5000)) {
                         mainHandler.postDelayed(this::closeAndOpenNextAccount, 700);
                     }
                 } else if (!st.equals("UNKNOWN")) {
@@ -445,6 +474,8 @@ public class MainActivity extends Activity {
         browserOpen = true;
         accountOpenedAt = System.currentTimeMillis();
         noticedStatus = "";
+        lastStatus = "";
+        lastNote = "";
 
         int total = NativeBridge.getAccountCount();
         String user = idx >= 0 ? NativeBridge.getAccountField(idx, "username") : "";
@@ -483,6 +514,12 @@ public class MainActivity extends Activity {
         }
     }
 
+    /* สถานะที่แปลว่า "ล็อกอินอยู่แต่ยังใช้งานไม่ได้" — ห้ามทับด้วย WORK ตอนดึง cookie */
+    private static boolean isBlockingStatus(String st) {
+        return "LOCKED".equals(st) || "BAN".equals(st) || "VERIFY".equals(st)
+                || "RECOVERY".equals(st) || "CAPTCHA".equals(st) || "2FA".equals(st);
+    }
+
     private int grabCookieInternal() {
         CookieManager cm = CookieManager.getInstance();
         String raw1 = cm.getCookie("https://www.roblox.com");
@@ -492,6 +529,18 @@ public class MainActivity extends Activity {
                 ? NativeBridge.getAccountField(activeAccountIdx, "username") : "";
         int savedIdx = NativeBridge.storeCookieFromHeader(
                 activeAccountIdx, user, combined, "ดึงจากหน้าต่างในแอป");
+        if (savedIdx >= 0) {
+            String st = lastStatus != null ? lastStatus : "";
+            String note = "ดึงจากหน้าต่างในแอป";
+            if (isBlockingStatus(st)) {
+                if (lastNote != null && lastNote.length() > 0) note = lastNote;
+            } else {
+                st = "WORK";
+            }
+            NativeBridge.updateStatus(savedIdx, st, note);
+            lastGrabStatus = st;
+            lastNote = note;
+        }
         return savedIdx >= 0 ? 1 : 0;
     }
 
