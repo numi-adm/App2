@@ -62,6 +62,9 @@ int core_store_cookie(int idx, const char *username, const char *cookie,
 /* Update account status and note */
 int core_update_status(int idx, const char *status, const char *note);
 
+/* Set account username (e.g. fill in name after checking a raw cookie) */
+int core_set_username(int idx, const char *username);
+
 /* Extract .ROBLOSECURITY value from raw Cookie header string */
 int core_extract_roblosecurity(const char *raw_cookies, char *out_cookie, size_t out_size);
 

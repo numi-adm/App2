@@ -194,6 +194,10 @@ public class MainActivity extends Activity {
         });
         topBar.addView(btnGrab);
 
+        Button btnRetry = makeBarButton("ลองใหม่", "#8a5a00");
+        btnRetry.setOnClickListener(v -> retryCurrentAccount());
+        topBar.addView(btnRetry);
+
         Button btnStopAll = makeBarButton("หน้าหลัก", "#444444");
         btnStopAll.setOnClickListener(v -> stopQueueAndCloseBrowser());
         topBar.addView(btnStopAll);
@@ -299,7 +303,8 @@ public class MainActivity extends Activity {
                         if (autoCheckMode && (System.currentTimeMillis() - accountOpenedAt > 2200)) {
                             mainHandler.postDelayed(this::closeAndOpenNextAccount, 900);
                         }
-                    } else if (st.equals("VERIFY") || st.equals("CAPTCHA") || st.equals("2FA") || st.equals("RATE")) {
+                    } else if (st.equals("VERIFY") || st.equals("CAPTCHA") || st.equals("2FA")
+                            || st.equals("RATE") || st.equals("RECOVERY")) {
                         browserStatusBadge.setTextColor(Color.parseColor("#ffcc44"));
                         notifyDashboard(null);
                     }
@@ -545,6 +550,10 @@ public class MainActivity extends Activity {
         String status;
         String note;
         if (name != null && name.length() > 0) {
+            if (user == null || user.length() == 0) {
+                NativeBridge.setUsername(idx, name);
+                user = name;
+            }
             if (user != null && user.length() > 0 && !name.equalsIgnoreCase(user)) {
                 status = "MISMATCH";
                 note = "cookie เป็นของบัญชี '" + name + "' ไม่ตรงกับชื่อในชีต '" + user + "'";
@@ -562,9 +571,27 @@ public class MainActivity extends Activity {
         NativeBridge.updateStatus(idx, status, note);
     }
 
+    /* ปุ่ม "ลองใหม่": เริ่มไอดีปัจจุบันใหม่ (ล้างเซสชันแล้วโหลด/กรอก/เช็คอีกรอบ) */
+    private void retryCurrentAccount() {
+        if (!browserOpen) {
+            notifyDashboard("ยังไม่มีหน้าต่างที่เปิดอยู่ — กดเช็ก/ดึง cookie ก่อน");
+            return;
+        }
+        int idx = activeAccountIdx;
+        if (idx >= 0) {
+            notifyDashboard("ลองใหม่ไอดี #" + (idx + 1) + "...");
+            openAccountInWebView(idx, true, currentAutoFill);
+        } else {
+            notifyDashboard("ลองใหม่ (โหมดเปิดเอง)...");
+            clearBrowserSession(() -> {
+                robloxWebView.loadUrl("https://www.roblox.com/login");
+                mainHandler.postDelayed(liveInspectorRunnable, 1500);
+            });
+        }
+    }
+
     /* Called when user presses "ปิด / ถัดไป ⏭": grabs any cookie first, then opens next account in queue! */
-    private void closeAndOpenNextAccount() {
-        grabCookieInternal();
+    private void closeAndOpenNextAccount() {        grabCookieInternal();
         notifyDashboard(null);
 
         if (!accountQueue.isEmpty()) {

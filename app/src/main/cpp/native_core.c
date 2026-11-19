@@ -701,6 +701,14 @@ int core_update_status(int idx, const char *status, const char *note) {
     return 0;
 }
 
+int core_set_username(int idx, const char *username) {
+    if (idx < 0 || idx >= g_account_count) return -1;
+    if (!username || !username[0]) return -1;
+    safe_copy(g_accounts[idx].username, sizeof(g_accounts[idx].username), username);
+    core_save_db();
+    return 0;
+}
+
 int core_extract_roblosecurity(const char *raw_cookies, char *out_cookie, size_t out_size) {
     if (!out_cookie || out_size == 0) return 0;
     out_cookie[0] = '\0';
@@ -852,6 +860,29 @@ char *core_classify_page(int idx, const char *url, const char *page_text,
     const char *status = "UNKNOWN";
     const char *note = "กำลังตรวจสอบหน้าเว็บ...";
 
+    int on_login = str_icontains(u, "/login") || str_icontains(u, "/signin");
+    int on_recovery = str_icontains(u, "recovery") || str_icontains(u, "forgot") ||
+                      str_icontains(u, "reset-password") ||
+                      str_icontains(t, "recover your account") ||
+                      str_icontains(t, "account recovery") ||
+                      str_icontains(t, "recovery code") ||
+                      str_icontains(t, "use another device") ||
+                      str_icontains(t, "verify your identity") ||
+                      str_icontains(t, "confirm your identity") ||
+                      str_icontains(t, "verify it's you") ||
+                      str_icontains(t, "get back into your account");
+    int badpass = str_icontains(t, "incorrect") ||
+                  str_icontains(t, "username and/or password") ||
+                  str_icontains(t, "you entered is incorrect") ||
+                  str_icontains(t, "wrong password") ||
+                  str_icontains(t, "invalid password") ||
+                  str_icontains(t, "invalid username") ||
+                  str_icontains(t, "ชื่อผู้ใช้หรือรหัสผ่าน") ||
+                  str_icontains(t, "ไม่ถูกต้อง") ||
+                  (on_login && (str_icontains(t, "we couldn't find") ||
+                                str_icontains(t, "doesn't exist") ||
+                                str_icontains(t, "does not exist")));
+
     if (str_icontains(t, "banned your account") ||
         str_icontains(t, "account has been banned") ||
         str_icontains(t, "account was banned") ||
@@ -861,9 +892,12 @@ char *core_classify_page(int idx, const char *url, const char *page_text,
         str_icontains(u, "not-approved")) {
         status = "BAN";
         note = "ไอดีถูกแบน / ระงับการใช้งาน (BAN)";
-    } else if (ck_len > 100) {
-        status = "WORK";
-        note = "ใช้งานได้ปกติ — ดึงและบันทึก Cookie สำเร็จแล้ว";
+    } else if (badpass) {
+        status = "BADPASS";
+        note = "รหัสไม่ตรงกับชื่อผู้ใช้ (ชื่อมีอยู่ แต่รหัสผ่านผิด)";
+    } else if (on_recovery) {
+        status = "RECOVERY";
+        note = "ติด Recovery — ต้องกู้บัญชี/ยืนยันตัวตน (อีเมล/รหัสกู้คืน) กดเองในหน้าต่าง";
     } else if (str_icontains(t, "press and hold") ||
                str_icontains(t, "hold the button") ||
                str_icontains(t, "verify you're human") ||
@@ -879,44 +913,41 @@ char *core_classify_page(int idx, const char *url, const char *page_text,
                str_icontains(t, "security code")) {
         status = "2FA";
         note = "ติดรหัสยืนยัน 2 ชั้น (2FA / อีเมล)";
-    } else if (str_icontains(t, "incorrect username or password") ||
-               str_icontains(t, "username or password is incorrect") ||
-               str_icontains(t, "incorrect password") ||
-               str_icontains(t, "incorrect username") ||
-               str_icontains(t, "we couldn't find") ||
-               str_icontains(t, "doesn't exist") ||
-               str_icontains(t, "does not exist") ||
-               str_icontains(t, "invalid username")) {
-        status = "BADPASS";
-        note = "รหัสไม่ตรงกับชื่อผู้ใช้ (ชื่อมีอยู่ แต่รหัสผ่านผิด)";
     } else if (str_icontains(t, "too many") ||
                str_icontains(t, "try again later") ||
                str_icontains(t, "throttl") ||
-               str_icontains(t, "slow down") ||
-               str_icontains(t, "please try again")) {
+               str_icontains(t, "slow down")) {
         status = "RATE";
         note = "ติด Rate Limit / Please try again (รอสักครู่หรือเปลี่ยนเน็ต)";
     } else if (has_arkose ||
                str_icontains(t, "account locked") ||
                str_icontains(t, "account has been locked") ||
-               str_icontains(t, "verify your identity") ||
                str_icontains(t, "complete the challenge") ||
                str_icontains(t, "suspicious activity") ||
                str_icontains(u, "challenge")) {
         status = "CAPTCHA";
         note = "ติด Captcha / ตัวต่อปริศนา หรือไอดีถูกล็อก";
+    } else if (ck_len > 100 && !on_login) {
+        status = "WORK";
+        note = "ใช้งานได้ปกติ — ดึงและบันทึก Cookie สำเร็จแล้ว";
     } else if (str_icontains(u, "/home") || str_icontains(u, "/discover") || str_icontains(u, "/charts")) {
         status = "WORK";
         note = "เข้าหน้า Home สำเร็จ";
+    } else if (on_login) {
+        status = "UNKNOWN";
+        note = "อยู่หน้าล็อกอิน — กำลังกรอก/รอผลจาก Roblox";
     }
 
     if (idx >= 0 && idx < g_account_count) {
-        if (ck_len > 100) {
+        if (ck_len > 100 && strcmp(status, "WORK") == 0) {
             core_store_cookie(idx, g_accounts[idx].username, ck, status, note);
         } else if (strcmp(status, "UNKNOWN") != 0) {
             core_update_status(idx, status, note);
         }
     }
+
+    /* hasCookie = cookie ที่ล็อกอินจริง (ไม่ใช่ cookie ของ guest ที่ได้มาหลังล็อกอินพลาด) */
+    int has_valid_cookie = (ck_len > 100 && strcmp(status, "WORK") == 0) ? 1 : 0;
 
     char *out = (char *)malloc(1024);
     if (!out) return NULL;
@@ -924,7 +955,7 @@ char *core_classify_page(int idx, const char *url, const char *page_text,
     *p++ = '{';
     p = append_json_kv(p, "status", status, 1);
     p = append_json_kv(p, "note", note, 1);
-    p += sprintf(p, "\"hasCookie\":%s}", (ck_len > 100) ? "true" : "false");
+    p += sprintf(p, "\"hasCookie\":%s}", has_valid_cookie ? "true" : "false");
     return out;
 }
 
@@ -1059,6 +1090,17 @@ Java_com_rooo_dashboard_NativeBridge_updateStatus(JNIEnv *env, jclass clazz,
     core_update_status((int)idx, st, nt);
     if (jstatus) (*env)->ReleaseStringUTFChars(env, jstatus, st);
     if (jnote)   (*env)->ReleaseStringUTFChars(env, jnote, nt);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_rooo_dashboard_NativeBridge_setUsername(JNIEnv *env, jclass clazz,
+                                                 jint idx, jstring juser) {
+    (void)clazz;
+    if (!juser) return -1;
+    const char *name = (*env)->GetStringUTFChars(env, juser, NULL);
+    int rc = core_set_username((int)idx, name);
+    (*env)->ReleaseStringUTFChars(env, juser, name);
+    return rc;
 }
 
 JNIEXPORT jstring JNICALL

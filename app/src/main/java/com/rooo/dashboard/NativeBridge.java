@@ -15,6 +15,7 @@ public class NativeBridge {
     public static native int deleteIndices(int[] indices);
     public static native int storeCookieFromHeader(int idx, String username, String rawCookieHeader, String note);
     public static native void updateStatus(int idx, String status, String note);
+    public static native int setUsername(int idx, String username);
     public static native String getAccountField(int idx, String field);
     public static native String buildLoginJs(int idx);
     public static native String classifyPage(int idx, String url, String pageText, boolean hasArkose, String rawCookies);
