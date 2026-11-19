@@ -79,6 +79,7 @@ public class MainActivity extends Activity {
     private boolean currentCleanSession = true;
     private boolean currentAutoFill = true;
     private boolean autoCheckMode = false;
+    private String noticedStatus = "";
 
     private final List<Integer> accountQueue = new ArrayList<>();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -303,10 +304,33 @@ public class MainActivity extends Activity {
                         if (autoCheckMode && (System.currentTimeMillis() - accountOpenedAt > 2200)) {
                             mainHandler.postDelayed(this::closeAndOpenNextAccount, 900);
                         }
+                    } else if (st.equals("LOCKED")) {
+                        browserStatusBadge.setTextColor(Color.parseColor("#ff8844"));
+                        notifyDashboard(null);
+                        if (!noticedStatus.equals("LOCKED")) {
+                            noticedStatus = "LOCKED";
+                            notifyDashboard("ไอดีถูกล็อก (Account locked) — กด Continue แล้วยืนยันว่าเป็นคนในหน้าต่าง");
+                        }
                     } else if (st.equals("VERIFY") || st.equals("CAPTCHA") || st.equals("2FA")
                             || st.equals("RATE") || st.equals("RECOVERY")) {
                         browserStatusBadge.setTextColor(Color.parseColor("#ffcc44"));
                         notifyDashboard(null);
+                        if (!noticedStatus.equals(st)) {
+                            noticedStatus = st;
+                            String alert;
+                            if (st.equals("VERIFY")) {
+                                alert = "ติด Press and hold — กดค้างที่ปุ่มในหน้าต่างเพื่อยืนยัน";
+                            } else if (st.equals("RECOVERY")) {
+                                alert = "ติด Recovery — ต้องกู้บัญชี/ยืนยันตัวตน (อีเมล/รหัสกู้คืน) กดเองในหน้าต่าง";
+                            } else if (st.equals("CAPTCHA")) {
+                                alert = "ติด Captcha / ตัวต่อปริศนา — กดยืนยันเองในหน้าต่าง";
+                            } else if (st.equals("2FA")) {
+                                alert = "ติดรหัสยืนยัน 2 ชั้น — กรอกรหัสจากอีเมลในหน้าต่าง";
+                            } else {
+                                alert = "ติด Please try again / Rate Limit — รอสักครู่แล้วกด ลองใหม่";
+                            }
+                            notifyDashboard(alert);
+                        }
                     }
                 } else {
                     browserStatusBadge.setText("กำลังล็อกอิน / ตรวจสอบสถานะ...");
@@ -420,6 +444,7 @@ public class MainActivity extends Activity {
         activeAccountIdx = idx;
         browserOpen = true;
         accountOpenedAt = System.currentTimeMillis();
+        noticedStatus = "";
 
         int total = NativeBridge.getAccountCount();
         String user = idx >= 0 ? NativeBridge.getAccountField(idx, "username") : "";
@@ -591,7 +616,8 @@ public class MainActivity extends Activity {
     }
 
     /* Called when user presses "ปิด / ถัดไป ⏭": grabs any cookie first, then opens next account in queue! */
-    private void closeAndOpenNextAccount() {        grabCookieInternal();
+    private void closeAndOpenNextAccount() {
+        grabCookieInternal();
         notifyDashboard(null);
 
         if (!accountQueue.isEmpty()) {

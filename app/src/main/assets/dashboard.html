@@ -24,7 +24,7 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
 .badge{padding:3px 10px;border-radius:10px;font-size:11px;white-space:nowrap;display:inline-block;font-weight:600}
 .WORK{background:#1d7a34}.BAN{background:#a02020}.CAPTCHA,.VERIFY{background:#a06a00}
 .BADPASS{background:#7a1f4e}.RATE,.TWOFA{background:#5a3fa0}
-.MISMATCH{background:#b03060}.NOCOOKIE{background:#6b6b2e}.RECOVERY{background:#9a6b00}
+.MISMATCH{background:#b03060}.NOCOOKIE{background:#6b6b2e}.RECOVERY{background:#9a6b00}.LOCKED{background:#8a3b00}
 .UNKNOWN,.ERROR{background:#555}.SKIP{background:#444}
 .mono{font-family:monospace;font-size:12px;word-break:break-all;max-width:240px}
 .note{color:#aaa;font-size:11px;line-height:1.45;display:block;margin-top:3px}
@@ -213,7 +213,7 @@ function cp(t) {
   }
 }
 
-const OKST = ['WORK','BAN','CAPTCHA','VERIFY','BADPASS','RATE','2FA','UNKNOWN','ERROR','SKIP','MISMATCH','NOCOOKIE','RECOVERY'];
+const OKST = ['WORK','BAN','CAPTCHA','VERIFY','BADPASS','RATE','2FA','UNKNOWN','ERROR','SKIP','MISMATCH','NOCOOKIE','RECOVERY','LOCKED'];
 function badge(s) {
   let c = OKST.includes(s) ? s : 'UNKNOWN';
   if (c === '2FA') c = 'TWOFA';

@@ -871,7 +871,8 @@ char *core_classify_page(int idx, const char *url, const char *page_text,
                       str_icontains(t, "confirm your identity") ||
                       str_icontains(t, "verify it's you") ||
                       str_icontains(t, "get back into your account");
-    int badpass = str_icontains(t, "incorrect") ||
+    int badpass = str_icontains(t, "incorrect username") ||
+                  str_icontains(t, "incorrect password") ||
                   str_icontains(t, "username and/or password") ||
                   str_icontains(t, "you entered is incorrect") ||
                   str_icontains(t, "wrong password") ||
@@ -882,6 +883,13 @@ char *core_classify_page(int idx, const char *url, const char *page_text,
                   (on_login && (str_icontains(t, "we couldn't find") ||
                                 str_icontains(t, "doesn't exist") ||
                                 str_icontains(t, "does not exist")));
+    int locked = str_icontains(t, "account locked") ||
+                 str_icontains(t, "account has been locked") ||
+                 str_icontains(t, "account was locked") ||
+                 str_icontains(t, "unlock your account") ||
+                 str_icontains(t, "suspicious activity") ||
+                 str_icontains(t, "confirming that you're a human") ||
+                 str_icontains(t, "confirm that you're a human");
 
     if (str_icontains(t, "banned your account") ||
         str_icontains(t, "account has been banned") ||
@@ -892,6 +900,9 @@ char *core_classify_page(int idx, const char *url, const char *page_text,
         str_icontains(u, "not-approved")) {
         status = "BAN";
         note = "ไอดีถูกแบน / ระงับการใช้งาน (BAN)";
+    } else if (locked) {
+        status = "LOCKED";
+        note = "ไอดีถูกล็อก (Account locked / suspicious activity) — กด Continue แล้วยืนยันว่าเป็นคนในหน้าต่าง";
     } else if (badpass) {
         status = "BADPASS";
         note = "รหัสไม่ตรงกับชื่อผู้ใช้ (ชื่อมีอยู่ แต่รหัสผ่านผิด)";
@@ -920,13 +931,10 @@ char *core_classify_page(int idx, const char *url, const char *page_text,
         status = "RATE";
         note = "ติด Rate Limit / Please try again (รอสักครู่หรือเปลี่ยนเน็ต)";
     } else if (has_arkose ||
-               str_icontains(t, "account locked") ||
-               str_icontains(t, "account has been locked") ||
                str_icontains(t, "complete the challenge") ||
-               str_icontains(t, "suspicious activity") ||
                str_icontains(u, "challenge")) {
         status = "CAPTCHA";
-        note = "ติด Captcha / ตัวต่อปริศนา หรือไอดีถูกล็อก";
+        note = "ติด Captcha / ตัวต่อปริศนา";
     } else if (ck_len > 100 && !on_login) {
         status = "WORK";
         note = "ใช้งานได้ปกติ — ดึงและบันทึก Cookie สำเร็จแล้ว";
