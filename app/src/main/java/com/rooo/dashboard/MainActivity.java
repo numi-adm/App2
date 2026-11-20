@@ -700,7 +700,13 @@ public class MainActivity extends Activity {
             if (st.equals("BADPASS") || st.equals("RETRY") || st.equals("RATE")) {
                 maybeAutoRetry(st);
             } else if (st.isEmpty() || st.equals("UNKNOWN")) {
-                if (autoRetryCount < 2) retryLoginNow("ครบ 10 วินาที ยังไม่ผ่าน");
+                if (autoRetryCount < 2) {
+                    retryLoginNow("ครบ 10 วินาที ยังไม่ผ่าน");
+                } else {
+                    browserStatusBadge.setText("ค้างเกิน 10 วินาที — ยังไม่ผ่าน (กด ↻ ลองใหม่)");
+                    browserStatusBadge.setTextColor(Color.parseColor("#ffcc44"));
+                    notifyDashboard("ครบ 10 วินาทีแล้วยังไม่ผ่าน — กด ↻ ลองใหม่ หรือกดยืนยันในหน้าต่าง");
+                }
             }
         }
     };
