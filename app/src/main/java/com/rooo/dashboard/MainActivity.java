@@ -101,6 +101,10 @@ public class MainActivity extends Activity {
     private String lastStatus = "";
     private String lastNote = "";
     private String lastGrabStatus = "";
+    private int autoRetryCount = 0;
+    private long loginCycleStart = 0;
+    private long lastRetryAt = 0;
+    private int openToken = 0;
 
     private final List<Integer> accountQueue = new ArrayList<>();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -226,10 +230,6 @@ public class MainActivity extends Activity {
         btnRetry.setOnClickListener(v -> retryCurrentAccount());
         topBar.addView(btnRetry);
 
-        Button btnStopAll = makeBarButton("หน้าหลัก", "#444444");
-        btnStopAll.setOnClickListener(v -> stopQueueAndCloseBrowser());
-        topBar.addView(btnStopAll);
-
         Button btnCloseNext = makeBarButton("ปิด / ถัดไป ⏭", "#a02828");
         btnCloseNext.setOnClickListener(v -> closeAndOpenNextAccount());
         topBar.addView(btnCloseNext);
@@ -264,6 +264,9 @@ public class MainActivity extends Activity {
                     if (js != null && !js.isEmpty()) {
                         view.evaluateJavascript(js, null);
                     }
+                    loginCycleStart = System.currentTimeMillis();
+                    mainHandler.removeCallbacks(stuckCheckRunnable);
+                    mainHandler.postDelayed(stuckCheckRunnable, 10000);
                 }
                 mainHandler.postDelayed(() -> inspectCurrentRobloxPage(), 600);
             }
@@ -318,6 +321,10 @@ public class MainActivity extends Activity {
                 lastStatus = st;
                 lastNote = note;
 
+                if (st.equals("BADPASS") || st.equals("RETRY") || st.equals("RATE")) {
+                    maybeAutoRetry(st);
+                }
+
                 if (hasCk) {
                     browserStatusBadge.setText("สถานะ: " + st + " — " + note);
                     browserStatusBadge.setTextColor(Color.parseColor("#44ff77"));
@@ -330,7 +337,8 @@ public class MainActivity extends Activity {
                     if (st.equals("BAN") || st.equals("BADPASS")) {
                         browserStatusBadge.setTextColor(Color.parseColor("#ff6666"));
                         notifyDashboard(null);
-                        if (autoCheckMode && (System.currentTimeMillis() - accountOpenedAt > 2200)) {
+                        if (autoCheckMode && autoRetryCount >= maxRetriesFor(st)
+                                && (System.currentTimeMillis() - accountOpenedAt > 2200)) {
                             mainHandler.postDelayed(this::closeAndOpenNextAccount, 900);
                         }
                     } else if (st.equals("LOCKED")) {
@@ -341,7 +349,7 @@ public class MainActivity extends Activity {
                             notifyDashboard("ไอดีถูกล็อก (Account locked) — กด Continue แล้วยืนยันว่าเป็นคนในหน้าต่าง");
                         }
                     } else if (st.equals("VERIFY") || st.equals("CAPTCHA") || st.equals("2FA")
-                            || st.equals("RATE") || st.equals("RECOVERY")) {
+                            || st.equals("RATE") || st.equals("RECOVERY") || st.equals("RETRY")) {
                         browserStatusBadge.setTextColor(Color.parseColor("#ffcc44"));
                         notifyDashboard(null);
                         if (!noticedStatus.equals(st)) {
@@ -355,6 +363,8 @@ public class MainActivity extends Activity {
                                 alert = "ติด Captcha / ตัวต่อปริศนา — กดยืนยันเองในหน้าต่าง";
                             } else if (st.equals("2FA")) {
                                 alert = "ติดรหัสยืนยัน 2 ชั้น — กรอกรหัสจากอีเมลในหน้าต่าง";
+                            } else if (st.equals("RETRY")) {
+                                alert = "Roblox ขึ้น Something went wrong — กำลังลองใหม่อัตโนมัติ";
                             } else {
                                 alert = "ติด Please try again / Rate Limit — รอสักครู่แล้วกด ลองใหม่";
                             }
@@ -476,6 +486,11 @@ public class MainActivity extends Activity {
         noticedStatus = "";
         lastStatus = "";
         lastNote = "";
+        autoRetryCount = 0;
+        loginCycleStart = 0;
+        lastRetryAt = 0;
+        openToken++;
+        mainHandler.removeCallbacks(stuckCheckRunnable);
 
         int total = NativeBridge.getAccountCount();
         String user = idx >= 0 ? NativeBridge.getAccountField(idx, "username") : "";
@@ -664,6 +679,63 @@ public class MainActivity extends Activity {
         }
     }
 
+    /* ===== ลองใหม่อัตโนมัติ ===== */
+    private static int maxRetriesFor(String st) {
+        if ("BADPASS".equals(st)) return 2;      // รหัสผิด → ลองใหม่ 2 ครั้งพอ
+        if ("RETRY".equals(st)) return 2;        // Something went wrong / ระบบขัดข้อง
+        if ("RATE".equals(st)) return 0;         // ติด rate limit → ต้องรอ ไม่ควรยิงซ้ำ
+        return 1;
+    }
+
+    private final Runnable stuckCheckRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!browserOpen || activeAccountIdx < 0 || !currentAutoFill) return;
+            if (loginCycleStart == 0) return;
+            if (System.currentTimeMillis() - loginCycleStart < 9500) {
+                mainHandler.postDelayed(this, 3000);
+                return;
+            }
+            String st = lastStatus != null ? lastStatus : "";
+            if (st.equals("BADPASS") || st.equals("RETRY") || st.equals("RATE")) {
+                maybeAutoRetry(st);
+            } else if (st.isEmpty() || st.equals("UNKNOWN")) {
+                if (autoRetryCount < 2) retryLoginNow("ครบ 10 วินาที ยังไม่ผ่าน");
+            }
+        }
+    };
+
+    private void maybeAutoRetry(String st) {
+        if (!browserOpen || !currentAutoFill || activeAccountIdx < 0) return;
+        long now = System.currentTimeMillis();
+        if (now - lastRetryAt < 4500) return;
+        if (autoRetryCount >= maxRetriesFor(st)) return;
+        lastRetryAt = now;
+        retryLoginNow(st);
+    }
+
+    private void retryLoginNow(String reason) {
+        if (activeAccountIdx < 0) return;
+        autoRetryCount++;
+        final int token = openToken;
+        lastStatus = "";
+        noticedStatus = "";
+        loginCycleStart = 0;
+        mainHandler.removeCallbacks(stuckCheckRunnable);
+        String label = "BADPASS".equals(reason) ? "รหัสไม่ตรง"
+                : ("RETRY".equals(reason) ? "Something went wrong"
+                : ("RATE".equals(reason) ? "Please try again" : reason));
+        browserStatusBadge.setText("↻ ลองใหม่อัตโนมัติ (" + label + ") ครั้งที่ " + autoRetryCount);
+        browserStatusBadge.setTextColor(Color.parseColor("#ffcc44"));
+        notifyDashboard("ลองใหม่อัตโนมัติ (" + label + ") ครั้งที่ " + autoRetryCount);
+        clearBrowserSession(() -> {
+            if (!browserOpen || token != openToken || activeAccountIdx < 0) return;
+            autoFillPending = true;
+            robloxWebView.loadUrl("https://www.roblox.com/login");
+            mainHandler.postDelayed(liveInspectorRunnable, 1200);
+        });
+    }
+
     /* Called when user presses "ปิด / ถัดไป ⏭": grabs any cookie first, then opens next account in queue! */
     private void closeAndOpenNextAccount() {
         grabCookieInternal();
@@ -684,6 +756,8 @@ public class MainActivity extends Activity {
         browserOpen = false;
         autoFillPending = false;
         autoCheckMode = false;
+        openToken++;
+        mainHandler.removeCallbacks(stuckCheckRunnable);
         mainHandler.removeCallbacks(liveInspectorRunnable);
         robloxWebView.loadUrl("about:blank");
         browserContainer.setVisibility(View.GONE);

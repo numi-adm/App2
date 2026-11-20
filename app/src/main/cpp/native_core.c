@@ -67,6 +67,45 @@ static int str_icontains(const char *haystack, const char *needle) {
     return 0;
 }
 
+/* เหมือน str_icontains แต่ข้ามช่องว่าง/ขึ้นบรรทัดใหม่/อักขระซ่อน
+ * (หน้าเว็บ Roblox แบ่งข้อความเป็นหลาย element ทำให้คำไทยขาดกลางบรรทัด) */
+static int str_icontains_loose(const char *haystack, const char *needle) {
+    if (!haystack || !needle || !*needle) return 0;
+    size_t nlen = strlen(needle);
+    const char *h = haystack;
+    while (*h) {
+        const char *hp = h;
+        size_t ni = 0;
+        while (needle[ni] && *hp) {
+            unsigned char nc = (unsigned char)needle[ni];
+            /* ช่องว่างในคำค้นหาไม่ต้องไปเทียบกับอะไร (ตัดทิ้งได้) */
+            if (nc == ' ' || nc == '\n' || nc == '\r' || nc == '\t' ||
+                nc == '\v' || nc == '\f') {
+                ni++;
+                continue;
+            }
+            unsigned char hc = (unsigned char)*hp;
+            if (hc == ' ' || hc == '\n' || hc == '\r' || hc == '\t' ||
+                hc == '\v' || hc == '\f') {
+                hp++;
+                continue;
+            }
+            if (hc == 0xC2 && (unsigned char)hp[1] == 0xA0) { hp += 2; continue; } /* NBSP */
+            if (hc == 0xE2 && (unsigned char)hp[1] == 0x80 &&
+                ((unsigned char)hp[2] == 0x8B || (unsigned char)hp[2] == 0x8C)) {
+                hp += 3; /* zero-width space / ZWNJ */
+                continue;
+            }
+            if (tolower(hc) != tolower(nc)) break;
+            hp++;
+            ni++;
+        }
+        if (ni == nlen) return 1;
+        h++;
+    }
+    return 0;
+}
+
 /* Minimal JSON string unescape & extraction helper */
 static const char *skip_ws(const char *p) {
     while (*p && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
@@ -824,7 +863,7 @@ char *core_build_login_js(const char *username, const char *password) {
         "          var cTimer = setInterval(function(){\n"
         "            cTries++;\n"
         "            var bodyTxt = (document.body ? document.body.innerText : '').toLowerCase();\n"
-        "            if(cTries > 6 || !location.pathname.includes('login') || bodyTxt.includes('verify') || bodyTxt.includes('hold') || bodyTxt.includes('incorrect') || bodyTxt.includes('step')){\n"
+        "            if(cTries > 6 || !location.pathname.includes('login') || bodyTxt.includes('verify') || bodyTxt.includes('hold') || bodyTxt.includes('incorrect') || bodyTxt.includes('step') || bodyTxt.includes('กดค้าง') || bodyTxt.includes('ไม่ถูกต้อง') || bodyTxt.includes('ยืนยัน') || bodyTxt.includes('ผิดพลาด')){\n"
         "              clearInterval(cTimer);\n"
         "              window._roooAutoLoginRunning = false;\n"
         "              return;\n"
@@ -863,40 +902,53 @@ char *core_classify_page(int idx, const char *url, const char *page_text,
     int on_login = str_icontains(u, "/login") || str_icontains(u, "/signin");
     int on_recovery = str_icontains(u, "recovery") || str_icontains(u, "forgot") ||
                       str_icontains(u, "reset-password") ||
-                      str_icontains(t, "recover your account") ||
-                      str_icontains(t, "account recovery") ||
-                      str_icontains(t, "recovery code") ||
-                      str_icontains(t, "use another device") ||
-                      str_icontains(t, "verify your identity") ||
-                      str_icontains(t, "confirm your identity") ||
-                      str_icontains(t, "verify it's you") ||
-                      str_icontains(t, "get back into your account");
-    int badpass = str_icontains(t, "incorrect username") ||
-                  str_icontains(t, "incorrect password") ||
-                  str_icontains(t, "username and/or password") ||
-                  str_icontains(t, "you entered is incorrect") ||
-                  str_icontains(t, "wrong password") ||
-                  str_icontains(t, "invalid password") ||
-                  str_icontains(t, "invalid username") ||
-                  str_icontains(t, "ชื่อผู้ใช้หรือรหัสผ่าน") ||
-                  str_icontains(t, "ไม่ถูกต้อง") ||
-                  (on_login && (str_icontains(t, "we couldn't find") ||
-                                str_icontains(t, "doesn't exist") ||
-                                str_icontains(t, "does not exist")));
-    int locked = str_icontains(t, "account locked") ||
-                 str_icontains(t, "account has been locked") ||
-                 str_icontains(t, "account was locked") ||
-                 str_icontains(t, "unlock your account") ||
-                 str_icontains(t, "suspicious activity") ||
-                 str_icontains(t, "confirming that you're a human") ||
-                 str_icontains(t, "confirm that you're a human");
+                      str_icontains_loose(t, "recover your account") ||
+                      str_icontains_loose(t, "account recovery") ||
+                      str_icontains_loose(t, "recovery code") ||
+                      str_icontains_loose(t, "use another device") ||
+                      str_icontains_loose(t, "verify your identity") ||
+                      str_icontains_loose(t, "confirm your identity") ||
+                      str_icontains_loose(t, "verify it's you") ||
+                      str_icontains_loose(t, "get back into your account") ||
+                      str_icontains_loose(t, "กู้คืนบัญชี") ||
+                      str_icontains_loose(t, "กู้บัญชี") ||
+                      str_icontains_loose(t, "ยืนยันตัวตน") ||
+                      str_icontains_loose(t, "ยืนยันว่าเป็นคุณ") ||
+                      str_icontains_loose(t, "รหัสกู้คืน") ||
+                      str_icontains_loose(t, "ใช้เครื่องอื่น");
+    int badpass = str_icontains_loose(t, "incorrect username") ||
+                  str_icontains_loose(t, "incorrect password") ||
+                  str_icontains_loose(t, "username and/or password") ||
+                  str_icontains_loose(t, "you entered is incorrect") ||
+                  str_icontains_loose(t, "wrong password") ||
+                  str_icontains_loose(t, "invalid password") ||
+                  str_icontains_loose(t, "invalid username") ||
+                  str_icontains_loose(t, "ชื่อผู้ใช้หรือรหัสผ่าน") ||
+                  str_icontains_loose(t, "รหัสผ่านไม่ถูกต้อง") ||
+                  str_icontains_loose(t, "ชื่อผู้ใช้ไม่ถูกต้อง") ||
+                  (on_login && (str_icontains_loose(t, "we couldn't find") ||
+                                str_icontains_loose(t, "doesn't exist") ||
+                                str_icontains_loose(t, "does not exist")));
+    int locked = str_icontains_loose(t, "account locked") ||
+                 str_icontains_loose(t, "account has been locked") ||
+                 str_icontains_loose(t, "account was locked") ||
+                 str_icontains_loose(t, "unlock your account") ||
+                 str_icontains_loose(t, "suspicious activity") ||
+                 str_icontains_loose(t, "confirming that you're a human") ||
+                 str_icontains_loose(t, "confirm that you're a human") ||
+                 str_icontains_loose(t, "บัญชีถูกล็อก") ||
+                 str_icontains_loose(t, "บัญชีของคุณถูกล็อก") ||
+                 str_icontains_loose(t, "กิจกรรมที่น่าสงสัย") ||
+                 str_icontains_loose(t, "ปลดล็อกบัญชี");
 
-    if (str_icontains(t, "banned your account") ||
-        str_icontains(t, "account has been banned") ||
-        str_icontains(t, "account was banned") ||
-        str_icontains(t, "permanently banned") ||
-        str_icontains(t, "this account has been banned") ||
-        str_icontains(t, "misusing roblox systems") ||
+    if (str_icontains_loose(t, "banned your account") ||
+        str_icontains_loose(t, "account has been banned") ||
+        str_icontains_loose(t, "account was banned") ||
+        str_icontains_loose(t, "permanently banned") ||
+        str_icontains_loose(t, "this account has been banned") ||
+        str_icontains_loose(t, "misusing roblox systems") ||
+        str_icontains_loose(t, "บัญชีถูกแบน") ||
+        str_icontains_loose(t, "ถูกแบน") ||
         str_icontains(u, "not-approved")) {
         status = "BAN";
         note = "ไอดีถูกแบน / ระงับการใช้งาน (BAN)";
@@ -909,29 +961,51 @@ char *core_classify_page(int idx, const char *url, const char *page_text,
     } else if (on_recovery) {
         status = "RECOVERY";
         note = "ติด Recovery — ต้องกู้บัญชี/ยืนยันตัวตน (อีเมล/รหัสกู้คืน) กดเองในหน้าต่าง";
-    } else if (str_icontains(t, "press and hold") ||
-               str_icontains(t, "hold the button") ||
-               str_icontains(t, "verify you're human") ||
-               str_icontains(t, "verify you are human")) {
+    } else if (str_icontains_loose(t, "press and hold") ||
+               str_icontains_loose(t, "hold the button") ||
+               str_icontains_loose(t, "verify you're human") ||
+               str_icontains_loose(t, "verify you are human") ||
+               str_icontains_loose(t, "กดค้าง") ||
+               str_icontains_loose(t, "ยืนยันว่าคุณเป็นมนุษย์") ||
+               str_icontains_loose(t, "ตรวจสอบว่าคุณเป็นมนุษย์") ||
+               str_icontains_loose(t, "คุณเป็นมนุษย์")) {
         status = "VERIFY";
         note = "ติด Verify (Press and hold) — กดค้างที่ปุ่มบนหน้าจอเพื่อยืนยัน";
-    } else if (str_icontains(t, "two-step") ||
-               str_icontains(t, "2-step") ||
-               str_icontains(t, "two step") ||
-               str_icontains(t, "verification code") ||
-               str_icontains(t, "enter the code") ||
-               str_icontains(t, "enter your code") ||
-               str_icontains(t, "security code")) {
+    } else if (str_icontains_loose(t, "two-step") ||
+               str_icontains_loose(t, "2-step") ||
+               str_icontains_loose(t, "two step") ||
+               str_icontains_loose(t, "verification code") ||
+               str_icontains_loose(t, "enter the code") ||
+               str_icontains_loose(t, "enter your code") ||
+               str_icontains_loose(t, "security code") ||
+               str_icontains_loose(t, "ยืนยันสองขั้นตอน") ||
+               str_icontains_loose(t, "การยืนยันสองขั้นตอน") ||
+               str_icontains_loose(t, "รหัสยืนยัน") ||
+               str_icontains_loose(t, "รหัสความปลอดภัย") ||
+               str_icontains_loose(t, "กรอกรหัส")) {
         status = "2FA";
         note = "ติดรหัสยืนยัน 2 ชั้น (2FA / อีเมล)";
-    } else if (str_icontains(t, "too many") ||
-               str_icontains(t, "try again later") ||
-               str_icontains(t, "throttl") ||
-               str_icontains(t, "slow down")) {
+    } else if (str_icontains_loose(t, "something went wrong") ||
+               str_icontains_loose(t, "please try again later") ||
+               str_icontains_loose(t, "try again later") ||
+               str_icontains_loose(t, "เกิดข้อผิดพลาด") ||
+               str_icontains_loose(t, "ข้อผิดพลาด") ||
+               str_icontains_loose(t, "ผิดพลาด") ||
+               str_icontains_loose(t, "โปรดลองอีกครั้ง") ||
+               str_icontains_loose(t, "ลองอีกครั้งในภายหลัง") ||
+               str_icontains_loose(t, "กรุณาลองใหม่") ||
+               str_icontains_loose(t, "ระบบขัดข้อง")) {
+        status = "RETRY";
+        note = "Roblox ตอบ Something went wrong / ระบบขัดข้อง — กำลังลองใหม่อัตโนมัติ";
+    } else if (str_icontains_loose(t, "too many") ||
+               str_icontains_loose(t, "throttl") ||
+               str_icontains_loose(t, "slow down") ||
+               str_icontains_loose(t, "พยายามมากเกินไป") ||
+               str_icontains_loose(t, "ทำรายการบ่อยเกินไป")) {
         status = "RATE";
         note = "ติด Rate Limit / Please try again (รอสักครู่หรือเปลี่ยนเน็ต)";
     } else if (has_arkose ||
-               str_icontains(t, "complete the challenge") ||
+               str_icontains_loose(t, "complete the challenge") ||
                str_icontains(u, "challenge")) {
         status = "CAPTCHA";
         note = "ติด Captcha / ตัวต่อปริศนา";
