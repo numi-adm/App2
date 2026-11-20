@@ -105,6 +105,7 @@ public class MainActivity extends Activity {
     private long loginCycleStart = 0;
     private long lastRetryAt = 0;
     private int openToken = 0;
+    private boolean skipScheduled = false;
 
     private final List<Integer> accountQueue = new ArrayList<>();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -230,6 +231,10 @@ public class MainActivity extends Activity {
         btnRetry.setOnClickListener(v -> retryCurrentAccount());
         topBar.addView(btnRetry);
 
+        Button btnHome = makeBarButton("หน้าหลัก", "#444444");
+        btnHome.setOnClickListener(v -> stopQueueAndCloseBrowser());
+        topBar.addView(btnHome);
+
         Button btnCloseNext = makeBarButton("ปิด / ถัดไป ⏭", "#a02828");
         btnCloseNext.setOnClickListener(v -> closeAndOpenNextAccount());
         topBar.addView(btnCloseNext);
@@ -334,41 +339,31 @@ public class MainActivity extends Activity {
                     }
                 } else if (!st.equals("UNKNOWN")) {
                     browserStatusBadge.setText("สถานะ: " + st + " — " + note);
-                    if (st.equals("BAN") || st.equals("BADPASS")) {
-                        browserStatusBadge.setTextColor(Color.parseColor("#ff6666"));
-                        notifyDashboard(null);
-                        if (autoCheckMode && autoRetryCount >= maxRetriesFor(st)
-                                && (System.currentTimeMillis() - accountOpenedAt > 2200)) {
-                            mainHandler.postDelayed(this::closeAndOpenNextAccount, 900);
-                        }
-                    } else if (st.equals("LOCKED")) {
+
+                    if (isSkipStatus(st)) {
+                        /* VERIFY / LOCKED / RECOVERY / 2FA / CAPTCHA / BAN → ข้ามทันที */
                         browserStatusBadge.setTextColor(Color.parseColor("#ff8844"));
                         notifyDashboard(null);
-                        if (!noticedStatus.equals("LOCKED")) {
-                            noticedStatus = "LOCKED";
-                            notifyDashboard("ไอดีถูกล็อก (Account locked) — กด Continue แล้วยืนยันว่าเป็นคนในหน้าต่าง");
+                        if (!noticedStatus.equals(st)) {
+                            noticedStatus = st;
+                            notifyDashboard("ติด " + st + " — ข้ามไอดีนี้ ไปตัวถัดไป");
                         }
-                    } else if (st.equals("VERIFY") || st.equals("CAPTCHA") || st.equals("2FA")
-                            || st.equals("RATE") || st.equals("RECOVERY") || st.equals("RETRY")) {
+                        if (!skipScheduled) {
+                            skipScheduled = true;
+                            mainHandler.postDelayed(this::skipCurrentAccount, 1200);
+                        }
+                    } else if (st.equals("BADPASS")) {
+                        browserStatusBadge.setTextColor(Color.parseColor("#ff6666"));
+                        notifyDashboard(null);
+                        /* ถ้าลองใหม่ครบแล้วยังไม่ผ่าน ตัวจับเวลาค้าง 10 วิ จะข้ามไอดีนี้ให้เอง */
+                    } else if (st.equals("RATE") || st.equals("RETRY")) {
                         browserStatusBadge.setTextColor(Color.parseColor("#ffcc44"));
                         notifyDashboard(null);
                         if (!noticedStatus.equals(st)) {
                             noticedStatus = st;
-                            String alert;
-                            if (st.equals("VERIFY")) {
-                                alert = "ติด Press and hold — กดค้างที่ปุ่มในหน้าต่างเพื่อยืนยัน";
-                            } else if (st.equals("RECOVERY")) {
-                                alert = "ติด Recovery — ต้องกู้บัญชี/ยืนยันตัวตน (อีเมล/รหัสกู้คืน) กดเองในหน้าต่าง";
-                            } else if (st.equals("CAPTCHA")) {
-                                alert = "ติด Captcha / ตัวต่อปริศนา — กดยืนยันเองในหน้าต่าง";
-                            } else if (st.equals("2FA")) {
-                                alert = "ติดรหัสยืนยัน 2 ชั้น — กรอกรหัสจากอีเมลในหน้าต่าง";
-                            } else if (st.equals("RETRY")) {
-                                alert = "Roblox ขึ้น Something went wrong — กำลังลองใหม่อัตโนมัติ";
-                            } else {
-                                alert = "ติด Please try again / Rate Limit — รอสักครู่แล้วกด ลองใหม่";
-                            }
-                            notifyDashboard(alert);
+                            notifyDashboard(st.equals("RETRY")
+                                    ? "Roblox ขึ้น Something went wrong — กำลังลองใหม่อัตโนมัติ"
+                                    : "ติด Please try again / Rate Limit — รอสักครู่แล้วกด ลองใหม่");
                         }
                     }
                 } else {
@@ -489,6 +484,7 @@ public class MainActivity extends Activity {
         autoRetryCount = 0;
         loginCycleStart = 0;
         lastRetryAt = 0;
+        skipScheduled = false;
         openToken++;
         mainHandler.removeCallbacks(stuckCheckRunnable);
 
@@ -679,6 +675,25 @@ public class MainActivity extends Activity {
         }
     }
 
+    /* ===== ข้ามไอดีที่ติดสถานะ / ค้าง ===== */
+    private static boolean isSkipStatus(String st) {
+        return "VERIFY".equals(st) || "LOCKED".equals(st) || "RECOVERY".equals(st)
+                || "2FA".equals(st) || "CAPTCHA".equals(st) || "BAN".equals(st);
+    }
+
+    /* ข้ามไอดีปัจจุบัน: เซฟสถานะ/ cookie เท่าที่มี แล้วไปไอดีถัดไป (ถ้าคิวหมดให้ปิด) */
+    private void skipCurrentAccount() {
+        if (!browserOpen) return;
+        int idx = activeAccountIdx;
+        String st = lastStatus == null ? "" : lastStatus;
+        if (idx >= 0) {
+            notifyDashboard("ข้ามไอดี #" + (idx + 1)
+                    + (st.isEmpty() ? " (ยังไม่ผ่าน)" : " (ติด " + st + ")")
+                    + " — ไปตัวถัดไป");
+        }
+        closeAndOpenNextAccount();
+    }
+
     /* ===== ลองใหม่อัตโนมัติ ===== */
     private static int maxRetriesFor(String st) {
         if ("BADPASS".equals(st)) return 2;      // รหัสผิด → ลองใหม่ 2 ครั้งพอ
@@ -696,18 +711,15 @@ public class MainActivity extends Activity {
                 mainHandler.postDelayed(this, 3000);
                 return;
             }
+            if (skipScheduled) return;
             String st = lastStatus != null ? lastStatus : "";
-            if (st.equals("BADPASS") || st.equals("RETRY") || st.equals("RATE")) {
-                maybeAutoRetry(st);
-            } else if (st.isEmpty() || st.equals("UNKNOWN")) {
-                if (autoRetryCount < 2) {
-                    retryLoginNow("ครบ 10 วินาที ยังไม่ผ่าน");
-                } else {
-                    browserStatusBadge.setText("ค้างเกิน 10 วินาที — ยังไม่ผ่าน (กด ↻ ลองใหม่)");
-                    browserStatusBadge.setTextColor(Color.parseColor("#ffcc44"));
-                    notifyDashboard("ครบ 10 วินาทีแล้วยังไม่ผ่าน — กด ↻ ลองใหม่ หรือกดยืนยันในหน้าต่าง");
-                }
-            }
+            if (st.equals("WORK")) return;
+            /* ครบ ~10 วิแล้วยังไม่ผ่าน (ไม่ขึ้น Verify / ไม่ได้ cookie) → ข้ามไอดีนี้ */
+            skipScheduled = true;
+            browserStatusBadge.setText("ครบ 10 วินาทีแล้วยังไม่ผ่าน — ข้ามไอดีนี้");
+            browserStatusBadge.setTextColor(Color.parseColor("#ffcc44"));
+            notifyDashboard("ครบ 10 วินาทีแล้วยังไม่ผ่าน — ข้ามไอดีนี้");
+            mainHandler.postDelayed(this::skipCurrentAccount, 500);
         }
     };
 
