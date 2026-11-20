@@ -350,7 +350,7 @@ public class MainActivity extends Activity {
                         }
                         if (!skipScheduled) {
                             skipScheduled = true;
-                            mainHandler.postDelayed(this::skipCurrentAccount, 1200);
+                            mainHandler.postDelayed(() -> skipCurrentAccount(), 1200);
                         }
                     } else if (st.equals("BADPASS")) {
                         browserStatusBadge.setTextColor(Color.parseColor("#ff6666"));
@@ -719,7 +719,7 @@ public class MainActivity extends Activity {
             browserStatusBadge.setText("ครบ 10 วินาทีแล้วยังไม่ผ่าน — ข้ามไอดีนี้");
             browserStatusBadge.setTextColor(Color.parseColor("#ffcc44"));
             notifyDashboard("ครบ 10 วินาทีแล้วยังไม่ผ่าน — ข้ามไอดีนี้");
-            mainHandler.postDelayed(this::skipCurrentAccount, 500);
+            mainHandler.postDelayed(() -> skipCurrentAccount(), 500);
         }
     };
 
