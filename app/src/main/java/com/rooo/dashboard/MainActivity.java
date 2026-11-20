@@ -279,9 +279,9 @@ public class MainActivity extends Activity {
         setContentView(root);
     }
 
-    /* ===== สถานะที่ต้องข้ามทันที ===== */
+    /* ===== สถานะที่ต้องข้ามทันที (VERIFY ให้รอกดเองก่อนปิด ไม่ข้ามทันที) ===== */
     private static boolean isSkipStatus(String st) {
-        return "VERIFY".equals(st) || "LOCKED".equals(st) || "RECOVERY".equals(st)
+        return "LOCKED".equals(st) || "RECOVERY".equals(st)
                 || "2FA".equals(st) || "CAPTCHA".equals(st) || "BAN".equals(st);
     }
 
@@ -302,22 +302,29 @@ public class MainActivity extends Activity {
         String lastGrabStatus = "";
         boolean autoFillPending = false;
         boolean skipScheduled = false;
+        boolean isVerifyWaiting = false;
+        long verifyStartTime = 0;
         int openToken = 0;
 
-        /* Watchdog: ถ้ายังไม่ผ่าน ครบ 10 วินาทีแล้วยังไม่ผ่าน ให้ข้ามทันที */
+        /* Watchdog: ถ้ายังไม่ผ่าน ครบ 30 วินาทีแล้วยังไม่ผ่าน ให้ข้ามทันที */
         final Runnable timeoutRunnable = new Runnable() {
             @Override
             public void run() {
                 if (!browserOpen || activeAccountIdx < 0 || skipScheduled) return;
                 if ("WORK".equals(lastStatus)) return;
                 skipScheduled = true;
-                updateHeader("ครบ 10 วินาทีแล้วยังไม่ผ่าน (ข้าม)", "#ffcc44");
                 final int idx = activeAccountIdx;
+                String st = ("VERIFY".equals(lastStatus)) ? "VERIFY"
+                        : ((lastStatus != null && !lastStatus.isEmpty() && !"UNKNOWN".equals(lastStatus)) ? lastStatus : "SKIP");
+                String note = "VERIFY".equals(st)
+                        ? "ติด Verify (Press and hold) — ไม่ได้กดยืนยันใน 30 วิ"
+                        : "ครบ 30 วินาทีแล้วยังไม่ผ่าน (ข้าม)";
+                updateHeader("ครบ 30 วินาทีแล้วยังไม่ผ่าน (ข้าม)", "#ffcc44");
                 synchronized (NativeBridge.class) {
-                    NativeBridge.updateStatus(idx, "SKIP", "ครบ 10 วินาทีแล้วยังไม่ผ่าน (ข้าม)");
+                    NativeBridge.updateStatus(idx, st, note);
                 }
-                notifyDashboard("ช่อง #" + (slotId + 1) + " ครบ 10 วิยังไม่ผ่าน — ข้ามไอดี #" + (idx + 1));
-                mainHandler.postDelayed(() -> skipSlot("ครบ 10 วินาทีแล้วยังไม่ผ่าน"), 120);
+                notifyDashboard("ช่อง #" + (slotId + 1) + " ครบ 30 วิยังไม่ผ่าน — ข้ามไอดี #" + (idx + 1));
+                mainHandler.postDelayed(() -> skipSlot("ครบ 30 วินาทีแล้วยังไม่ผ่าน"), 120);
             }
         };
 
@@ -437,13 +444,15 @@ public class MainActivity extends Activity {
             this.lastStatus = "";
             this.lastNote = "";
             this.skipScheduled = false;
+            this.isVerifyWaiting = false;
+            this.verifyStartTime = 0;
             this.openToken++;
 
             mainHandler.removeCallbacks(timeoutRunnable);
             mainHandler.removeCallbacks(liveInspectorRunnable);
 
-            // เริ่มจับเวลา 10 วินาที — ครบแล้วยังไม่ผ่านจะข้ามทันที
-            mainHandler.postDelayed(timeoutRunnable, 10000);
+            // เริ่มจับเวลา 30 วินาที — ครบแล้วยังไม่ผ่านจะข้ามทันที
+            mainHandler.postDelayed(timeoutRunnable, 30000);
 
             updateHeader("กำลังเปิดและกรอกรหัส...", "#99ccff");
 
@@ -518,7 +527,7 @@ public class MainActivity extends Activity {
                     lastNote = note;
 
                     if (isSkipStatus(st)) {
-                        /* VERIFY / LOCKED / RECOVERY / 2FA / CAPTCHA / BAN → ข้ามไปเลยทันที! */
+                        /* LOCKED / RECOVERY / 2FA / CAPTCHA / BAN → ข้ามไปเลยทันที! */
                         skipScheduled = true;
                         mainHandler.removeCallbacks(timeoutRunnable);
                         mainHandler.removeCallbacks(liveInspectorRunnable);
@@ -528,6 +537,25 @@ public class MainActivity extends Activity {
                         }
                         notifyDashboard("ช่อง #" + (slotId + 1) + " ติด " + st + " — ข้ามไอดี #" + (idx + 1));
                         mainHandler.postDelayed(() -> skipSlot("ติด " + st), 150);
+                        return;
+                    }
+
+                    if ("VERIFY".equals(st)) {
+                        /* ติด VERIFY (Press and hold) → รอกดเองก่อนปิด (เริ่มนับเวลาให้ 30 วิ) */
+                        if (!isVerifyWaiting) {
+                            isVerifyWaiting = true;
+                            verifyStartTime = System.currentTimeMillis();
+                            mainHandler.removeCallbacks(timeoutRunnable);
+                            mainHandler.postDelayed(timeoutRunnable, 30000);
+                            synchronized (NativeBridge.class) {
+                                NativeBridge.updateStatus(idx, "VERIFY",
+                                        (note != null && !note.isEmpty()) ? note : "ติด Verify (Press and hold) — กดค้างที่ปุ่มบนหน้าจอเพื่อยืนยัน");
+                            }
+                            notifyDashboard("ช่อง #" + (slotId + 1) + " ติด Verify — กด Press and hold ในหน้าต่าง");
+                        }
+                        long elapsed = (System.currentTimeMillis() - verifyStartTime) / 1000;
+                        long rem = Math.max(0, 30 - elapsed);
+                        updateHeader("VERIFY — กดค้างในจอ (" + rem + "s/30s)", "#ffaa00");
                         return;
                     }
 
@@ -561,7 +589,7 @@ public class MainActivity extends Activity {
                         updateHeader(st + " (" + note + ")", "#ffcc44");
                     } else {
                         long elapsed = (System.currentTimeMillis() - accountOpenedAt) / 1000;
-                        updateHeader("กำลังล็อกอิน... (" + elapsed + "s/10s)", "#99ccff");
+                        updateHeader("กำลังล็อกอิน... (" + elapsed + "s/30s)", "#99ccff");
                     }
                 } catch (Exception ignored) {}
             });
@@ -573,10 +601,11 @@ public class MainActivity extends Activity {
             mainHandler.removeCallbacks(liveInspectorRunnable);
             final int prevIdx = activeAccountIdx;
             if (prevIdx >= 0) {
-                String st = (lastStatus == null || lastStatus.isEmpty() || "UNKNOWN".equals(lastStatus))
-                        ? "SKIP" : lastStatus;
-                String note = (lastNote == null || lastNote.isEmpty())
-                        ? reason : lastNote;
+                String st = "VERIFY".equals(lastStatus) ? "VERIFY"
+                        : ((lastStatus == null || lastStatus.isEmpty() || "UNKNOWN".equals(lastStatus)) ? "SKIP" : lastStatus);
+                String note = "VERIFY".equals(st)
+                        ? ((lastNote != null && !lastNote.isEmpty()) ? lastNote : "ติด Verify (Press and hold) — กดค้างที่ปุ่มบนหน้าจอเพื่อยืนยัน")
+                        : ((lastNote == null || lastNote.isEmpty()) ? reason : lastNote);
                 synchronized (NativeBridge.class) {
                     NativeBridge.updateStatus(prevIdx, st, note);
                 }
