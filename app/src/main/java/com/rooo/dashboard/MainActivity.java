@@ -348,16 +348,16 @@ public class MainActivity extends Activity {
                     if (autoCheckMode && (System.currentTimeMillis() - accountOpenedAt > 4000)) {
                         mainHandler.postDelayed(this::closeAndOpenNextAccount, 700);
                     }
-                } else if ("VERIFY".equals(st)) {
-                    // ติดกดเพื่อยืนยัน (Press and hold) — ให้ผู้ใช้กดเองในหน้าต่างได้ ไม่รีเซ็ต ไม่ตัดข้ามทันที
-                    browserStatusBadge.setText("สถานะ: VERIFY — " + note);
+                } else if ("VERIFY".equals(st) || "CAPTCHA".equals(st)) {
+                    // ติดกดเพื่อยืนยัน หรือ Verifying not a bot / Captcha — ให้ผู้ใช้กดเองในหน้าต่างได้ ไม่รีเซ็ต ไม่ตัดข้าม
+                    browserStatusBadge.setText("สถานะ: " + st + " — " + note);
                     browserStatusBadge.setTextColor(Color.parseColor("#ffaa00"));
                     notifyDashboard(null);
                 } else if (!"UNKNOWN".equals(st)) {
                     browserStatusBadge.setText("สถานะ: " + st + " — " + note);
 
                     if (isSkipStatus(st)) {
-                        /* LOCKED / RECOVERY / 2FA / CAPTCHA / BAN → ข้ามไอดีนี้ (ไม่รีเซ็ตหน้า) */
+                        /* LOCKED / RECOVERY / 2FA / BAN → ข้ามไอดีนี้ (ไม่รีเซ็ตหน้า) */
                         browserStatusBadge.setTextColor(Color.parseColor("#ff8844"));
                         notifyDashboard(null);
                         if (!noticedStatus.equals(st)) {
@@ -687,7 +687,7 @@ public class MainActivity extends Activity {
     /* ข้ามไอดี: สถานะที่ไม่ต้องรอและไม่ต้องรีเซ็ตหน้า */
     private static boolean isSkipStatus(String st) {
         return "LOCKED".equals(st) || "RECOVERY".equals(st)
-                || "2FA".equals(st) || "CAPTCHA".equals(st) || "BAN".equals(st);
+                || "2FA".equals(st) || "BAN".equals(st);
     }
 
     private void skipCurrentAccount() {
@@ -718,8 +718,8 @@ public class MainActivity extends Activity {
             if (skipScheduled) return;
             String st = lastStatus != null ? lastStatus : "";
             if ("WORK".equals(st)) return;
-            if ("VERIFY".equals(st)) {
-                // ติดกดเพื่อยืนยัน (Press and hold) — ให้ผู้ใช้กดเองในหน้าต่าง ไม่ตัดข้าม ไม่รีเซ็ต
+            if ("VERIFY".equals(st) || "CAPTCHA".equals(st)) {
+                // ติดกดเพื่อยืนยัน หรือ Verifying not a bot / Captcha — ให้ผู้ใช้กดเองในหน้าต่าง ไม่ตัดข้าม ไม่รีเซ็ต
                 return;
             }
 

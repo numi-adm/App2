@@ -891,7 +891,7 @@ char *core_build_login_js(const char *username, const char *password) {
         "              var cTimer = setInterval(function(){\n"
         "                cTries++;\n"
         "                var bodyTxt = (document.body ? document.body.innerText : '').toLowerCase();\n"
-        "                if(cTries > 6 || !location.pathname.includes('login') || bodyTxt.includes('verify') || bodyTxt.includes('hold') || bodyTxt.includes('incorrect') || bodyTxt.includes('unknown') || bodyTxt.includes('error') || bodyTxt.includes('wrong') || bodyTxt.includes('try again') || bodyTxt.includes('step') || bodyTxt.includes('กดค้าง') || bodyTxt.includes('ไม่ถูกต้อง') || bodyTxt.includes('ยืนยัน') || bodyTxt.includes('ข้อผิดพลาด') || bodyTxt.includes('ผิดพลาด')){\n"
+        "                if(cTries > 6 || !location.pathname.includes('login') || bodyTxt.includes('verify') || bodyTxt.includes('hold') || bodyTxt.includes('bot') || bodyTxt.includes('incorrect') || bodyTxt.includes('unknown') || bodyTxt.includes('error') || bodyTxt.includes('wrong') || bodyTxt.includes('try again') || bodyTxt.includes('step') || bodyTxt.includes('กดค้าง') || bodyTxt.includes('ไม่ถูกต้อง') || bodyTxt.includes('ยืนยัน') || bodyTxt.includes('ข้อผิดพลาด') || bodyTxt.includes('ผิดพลาด')){\n"
         "                  clearInterval(cTimer);\n"
         "                  window._roooAutoLoginRunning = false;\n"
         "                  return;\n"
@@ -997,12 +997,21 @@ char *core_classify_page(int idx, const char *url, const char *page_text,
                str_icontains_loose(t, "hold the button") ||
                str_icontains_loose(t, "verify you're human") ||
                str_icontains_loose(t, "verify you are human") ||
+               str_icontains_loose(t, "verifying you're not a bot") ||
+               str_icontains_loose(t, "verifying you are not a bot") ||
+               str_icontains_loose(t, "verify you're not a bot") ||
+               str_icontains_loose(t, "verify you are not a bot") ||
+               str_icontains_loose(t, "you're not a bot") ||
+               str_icontains_loose(t, "not a bot") ||
+               str_icontains_loose(t, "กำลังตรวจสอบว่าคุณไม่ใช่บอท") ||
+               str_icontains_loose(t, "ตรวจสอบว่าคุณไม่ใช่บอท") ||
+               str_icontains_loose(t, "ไม่ใช่บอท") ||
                str_icontains_loose(t, "กดค้าง") ||
                str_icontains_loose(t, "ยืนยันว่าคุณเป็นมนุษย์") ||
                str_icontains_loose(t, "ตรวจสอบว่าคุณเป็นมนุษย์") ||
                str_icontains_loose(t, "คุณเป็นมนุษย์")) {
         status = "VERIFY";
-        note = "ติด Verify (Press and hold) — กดค้างที่ปุ่มบนหน้าจอเพื่อยืนยัน";
+        note = "ติดยืนยันตัวตน (Press and hold / Verifying not a bot) — ยืนยันในหน้าต่าง";
     } else if (str_icontains_loose(t, "two-step") ||
                str_icontains_loose(t, "2-step") ||
                str_icontains_loose(t, "two step") ||
