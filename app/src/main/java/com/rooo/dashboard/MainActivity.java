@@ -739,7 +739,7 @@ public class MainActivity extends Activity {
         if (!browserOpen || !currentAutoFill || activeAccountIdx < 0) return;
         if (!"BADPASS".equals(st) && !"RETRY".equals(st)) return;
         long now = System.currentTimeMillis();
-        if (now - lastRetryAt < 4500) return;
+        if (now - lastRetryAt < 3000) return;
         if (autoRetryCount >= 2) return;
         lastRetryAt = now;
         retryLoginNow(st);
@@ -754,15 +754,20 @@ public class MainActivity extends Activity {
         noticedStatus = "";
         loginCycleStart = 0;
         mainHandler.removeCallbacks(stuckCheckRunnable);
+        mainHandler.removeCallbacks(liveInspectorRunnable);
         String label = "BADPASS".equals(reason) ? "รหัสไม่ตรง" : "เกิดข้อผิดพลาดไม่ทราบสาเหตุ";
-        browserStatusBadge.setText("↻ ลองใหม่อัตโนมัติ (" + label + ") ครั้งที่ " + autoRetryCount);
+        browserStatusBadge.setText("↻ ลองใหม่อัตโนมัติ (" + label + ") ครั้งที่ " + autoRetryCount + "/2");
         browserStatusBadge.setTextColor(Color.parseColor("#ffcc44"));
-        notifyDashboard("ลองใหม่อัตโนมัติ (" + label + ") ครั้งที่ " + autoRetryCount);
+        notifyDashboard("ลองใหม่อัตโนมัติ (" + label + ") ครั้งที่ " + autoRetryCount + "/2");
         clearBrowserSession(() -> {
             if (!browserOpen || token != openToken || activeAccountIdx < 0) return;
-            autoFillPending = true;
-            robloxWebView.loadUrl("https://www.roblox.com/login");
-            mainHandler.postDelayed(liveInspectorRunnable, 1200);
+            robloxWebView.loadUrl("about:blank");
+            mainHandler.postDelayed(() -> {
+                if (!browserOpen || token != openToken || activeAccountIdx < 0) return;
+                autoFillPending = true;
+                robloxWebView.loadUrl("https://www.roblox.com/login");
+                mainHandler.postDelayed(liveInspectorRunnable, 1200);
+            }, 180);
         });
     }
 

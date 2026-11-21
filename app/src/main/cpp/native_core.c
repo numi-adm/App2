@@ -891,7 +891,7 @@ char *core_build_login_js(const char *username, const char *password) {
         "              var cTimer = setInterval(function(){\n"
         "                cTries++;\n"
         "                var bodyTxt = (document.body ? document.body.innerText : '').toLowerCase();\n"
-        "                if(cTries > 6 || !location.pathname.includes('login') || bodyTxt.includes('verify') || bodyTxt.includes('hold') || bodyTxt.includes('incorrect') || bodyTxt.includes('step') || bodyTxt.includes('กดค้าง') || bodyTxt.includes('ไม่ถูกต้อง') || bodyTxt.includes('ยืนยัน') || bodyTxt.includes('ผิดพลาด')){\n"
+        "                if(cTries > 6 || !location.pathname.includes('login') || bodyTxt.includes('verify') || bodyTxt.includes('hold') || bodyTxt.includes('incorrect') || bodyTxt.includes('unknown') || bodyTxt.includes('error') || bodyTxt.includes('wrong') || bodyTxt.includes('try again') || bodyTxt.includes('step') || bodyTxt.includes('กดค้าง') || bodyTxt.includes('ไม่ถูกต้อง') || bodyTxt.includes('ยืนยัน') || bodyTxt.includes('ข้อผิดพลาด') || bodyTxt.includes('ผิดพลาด')){\n"
         "                  clearInterval(cTimer);\n"
         "                  window._roooAutoLoginRunning = false;\n"
         "                  return;\n"
@@ -1017,18 +1017,6 @@ char *core_classify_page(int idx, const char *url, const char *page_text,
                str_icontains_loose(t, "กรอกรหัส")) {
         status = "2FA";
         note = "ติดรหัสยืนยัน 2 ชั้น (2FA / อีเมล)";
-    } else if (str_icontains_loose(t, "something went wrong") ||
-               str_icontains_loose(t, "please try again later") ||
-               str_icontains_loose(t, "try again later") ||
-               str_icontains_loose(t, "เกิดข้อผิดพลาด") ||
-               str_icontains_loose(t, "ข้อผิดพลาด") ||
-               str_icontains_loose(t, "ผิดพลาด") ||
-               str_icontains_loose(t, "โปรดลองอีกครั้ง") ||
-               str_icontains_loose(t, "ลองอีกครั้งในภายหลัง") ||
-               str_icontains_loose(t, "กรุณาลองใหม่") ||
-               str_icontains_loose(t, "ระบบขัดข้อง")) {
-        status = "RETRY";
-        note = "Roblox ตอบ Something went wrong / ระบบขัดข้อง — กำลังลองใหม่อัตโนมัติ";
     } else if (str_icontains_loose(t, "too many") ||
                str_icontains_loose(t, "throttl") ||
                str_icontains_loose(t, "slow down") ||
@@ -1036,6 +1024,25 @@ char *core_classify_page(int idx, const char *url, const char *page_text,
                str_icontains_loose(t, "ทำรายการบ่อยเกินไป")) {
         status = "RATE";
         note = "ติด Rate Limit / Please try again (รอสักครู่หรือเปลี่ยนเน็ต)";
+    } else if (str_icontains_loose(t, "an unknown error") ||
+               str_icontains_loose(t, "unknown error") ||
+               str_icontains_loose(t, "error occurred") ||
+               str_icontains_loose(t, "something went wrong") ||
+               str_icontains_loose(t, "please try again") ||
+               str_icontains_loose(t, "try again") ||
+               str_icontains_loose(t, "ข้อผิดพลาดที่ไม่ทราบสาเหตุ") ||
+               str_icontains_loose(t, "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ") ||
+               str_icontains_loose(t, "เกิดข้อผิดพลาดไม่ทราบสาเหตุ") ||
+               str_icontains_loose(t, "เกิดข้อผิดพลาด") ||
+               str_icontains_loose(t, "ข้อผิดพลาด") ||
+               str_icontains_loose(t, "ผิดพลาด") ||
+               str_icontains_loose(t, "โปรดลองอีกครั้ง") ||
+               str_icontains_loose(t, "ลองอีกครั้งในภายหลัง") ||
+               str_icontains_loose(t, "ลองอีกครั้ง") ||
+               str_icontains_loose(t, "กรุณาลองใหม่") ||
+               str_icontains_loose(t, "ระบบขัดข้อง")) {
+        status = "RETRY";
+        note = "Roblox ตอบ Something went wrong / เกิดข้อผิดพลาดไม่ทราบสาเหตุ — กำลังลองใหม่อัตโนมัติ";
     } else if (has_arkose ||
                str_icontains_loose(t, "complete the challenge") ||
                str_icontains(u, "challenge")) {
