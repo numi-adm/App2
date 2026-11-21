@@ -770,37 +770,51 @@ int core_extract_roblosecurity(const char *raw_cookies, char *out_cookie, size_t
     return (int)len;
 }
 
+static void escape_js_literal(const char *src, char *dst, size_t dst_size) {
+    if (!dst || dst_size < 3) return;
+    size_t di = 0;
+    dst[di++] = '"';
+    if (src) {
+        for (const unsigned char *s = (const unsigned char *)src; *s && di + 8 < dst_size; s++) {
+            if (*s == '\\') { dst[di++] = '\\'; dst[di++] = '\\'; }
+            else if (*s == '"') { dst[di++] = '\\'; dst[di++] = '"'; }
+            else if (*s == '\n') { dst[di++] = '\\'; dst[di++] = 'n'; }
+            else if (*s == '\r') { dst[di++] = '\\'; dst[di++] = 'r'; }
+            else if (*s == '\t') { dst[di++] = '\\'; dst[di++] = 't'; }
+            else if (*s < 32) {
+                di += snprintf(dst + di, dst_size - di, "\\u%04x", *s);
+            } else {
+                dst[di++] = (char)*s;
+            }
+        }
+    }
+    dst[di++] = '"';
+    dst[di] = '\0';
+}
+
 char *core_build_login_js(const char *username, const char *password) {
-    char esc_u[MAX_USERNAME * 2 + 16];
-    char esc_p[MAX_PASSWORD * 2 + 16];
-    size_t ui = 0, pi = 0;
-
-    if (username) {
-        for (const char *s = username; *s && ui + 2 < sizeof(esc_u); s++) {
-            if (*s == '\\' || *s == '\'' || *s == '"') esc_u[ui++] = '\\';
-            esc_u[ui++] = *s;
-        }
-    }
-    esc_u[ui] = '\0';
-
-    if (password) {
-        for (const char *s = password; *s && pi + 2 < sizeof(esc_p); s++) {
-            if (*s == '\\' || *s == '\'' || *s == '"') esc_p[pi++] = '\\';
-            esc_p[pi++] = *s;
-        }
-    }
-    esc_p[pi] = '\0';
+    char esc_u[MAX_USERNAME * 6 + 16];
+    char esc_p[MAX_PASSWORD * 6 + 16];
+    escape_js_literal(username, esc_u, sizeof(esc_u));
+    escape_js_literal(password, esc_p, sizeof(esc_p));
 
     /*
      * React 17/18 compatible input value setter + multi-strategy Log In button clicker.
-     * Resets el._valueTracker before calling native value setter so React state updates
-     * and enables the Log In button, then clicks the Log In button via pointer/mouse/click
-     * events and form.requestSubmit(), retrying if the button takes a moment to enable.
+     * Verifies that password actually exists in DOM before and after setting it so React
+     * re-renders cannot leave the password field blank.
      */
     const char *tmpl =
         "(function(){\n"
+        "  var U_VAL = %s;\n"
+        "  var P_VAL = %s;\n"
         "  if(window._roooAutoLoginRunning) return;\n"
         "  window._roooAutoLoginRunning = true;\n"
+        "  function getU(){\n"
+        "    return document.querySelector('#login-username, input[name=\"username\"], input[autocomplete=\"username\"], input#signup-username');\n"
+        "  }\n"
+        "  function getP(){\n"
+        "    return document.querySelector('#login-password, input[name=\"password\"], input[type=\"password\"]');\n"
+        "  }\n"
         "  function setReactValue(el, val){\n"
         "    if(!el) return false;\n"
         "    try{ el.focus(); el.click(); }catch(e){}\n"
@@ -818,11 +832,11 @@ char *core_build_login_js(const char *username, const char *password) {
         "      el.dispatchEvent(new Event('input', {bubbles:true}));\n"
         "    }\n"
         "    el.dispatchEvent(new Event('change', {bubbles:true}));\n"
-        "    try{ el.blur(); }catch(e){}\n"
-        "    return true;\n"
+        "    try{ el.dispatchEvent(new KeyboardEvent('keyup', {bubbles:true})); }catch(e){}\n"
+        "    return el.value === val;\n"
         "  }\n"
         "  function clickLoginBtn(){\n"
-        "    var pass = document.querySelector('#login-password, input[name=\"password\"], input[type=\"password\"]');\n"
+        "    var pass = getP();\n"
         "    var f = pass ? pass.closest('form') : null;\n"
         "    var scope = f || document;\n"
         "    var re = /^(sign in|signin|log in|login|เข้าสู่ระบบ)$/i;\n"
@@ -850,41 +864,59 @@ char *core_build_login_js(const char *username, const char *password) {
         "  var tries = 0;\n"
         "  var timer = setInterval(function(){\n"
         "    tries++;\n"
-        "    var u = document.querySelector('#login-username, input[name=\"username\"], input[autocomplete=\"username\"]');\n"
-        "    var p = document.querySelector('#login-password, input[name=\"password\"], input[type=\"password\"]');\n"
+        "    var u = getU();\n"
+        "    var p = getP();\n"
+        "    if(u && !p && tries > 6){\n"
+        "      if(u.value !== U_VAL) setReactValue(u, U_VAL);\n"
+        "      clickLoginBtn();\n"
+        "    }\n"
         "    if(u && p){\n"
         "      clearInterval(timer);\n"
-        "      setReactValue(u, '%s');\n"
+        "      setReactValue(u, U_VAL);\n"
         "      setTimeout(function(){\n"
-        "        setReactValue(p, '%s');\n"
-        "        setTimeout(function(){\n"
-        "          clickLoginBtn();\n"
-        "          var cTries = 0;\n"
-        "          var cTimer = setInterval(function(){\n"
-        "            cTries++;\n"
-        "            var bodyTxt = (document.body ? document.body.innerText : '').toLowerCase();\n"
-        "            if(cTries > 6 || !location.pathname.includes('login') || bodyTxt.includes('verify') || bodyTxt.includes('hold') || bodyTxt.includes('incorrect') || bodyTxt.includes('step') || bodyTxt.includes('กดค้าง') || bodyTxt.includes('ไม่ถูกต้อง') || bodyTxt.includes('ยืนยัน') || bodyTxt.includes('ผิดพลาด')){\n"
-        "              clearInterval(cTimer);\n"
-        "              window._roooAutoLoginRunning = false;\n"
-        "              return;\n"
-        "            }\n"
-        "            if(u.value !== '%s') setReactValue(u, '%s');\n"
-        "            if(p.value !== '%s') setReactValue(p, '%s');\n"
-        "            clickLoginBtn();\n"
-        "          }, 1200);\n"
-        "        }, 400);\n"
-        "      }, 350);\n"
-        "    } else if(tries > 40){\n"
+        "        var freshP = getP() || p;\n"
+        "        setReactValue(freshP, P_VAL);\n"
+        "        var verifyTries = 0;\n"
+        "        var verifyTimer = setInterval(function(){\n"
+        "          verifyTries++;\n"
+        "          var curU = getU();\n"
+        "          var curP = getP();\n"
+        "          if(curU && curU.value !== U_VAL) setReactValue(curU, U_VAL);\n"
+        "          if(curP && curP.value !== P_VAL) setReactValue(curP, P_VAL);\n"
+        "          if((curP && curP.value === P_VAL) || verifyTries > 10){\n"
+        "            clearInterval(verifyTimer);\n"
+        "            setTimeout(function(){\n"
+        "              clickLoginBtn();\n"
+        "              var cTries = 0;\n"
+        "              var cTimer = setInterval(function(){\n"
+        "                cTries++;\n"
+        "                var bodyTxt = (document.body ? document.body.innerText : '').toLowerCase();\n"
+        "                if(cTries > 6 || !location.pathname.includes('login') || bodyTxt.includes('verify') || bodyTxt.includes('hold') || bodyTxt.includes('incorrect') || bodyTxt.includes('step') || bodyTxt.includes('กดค้าง') || bodyTxt.includes('ไม่ถูกต้อง') || bodyTxt.includes('ยืนยัน') || bodyTxt.includes('ผิดพลาด')){\n"
+        "                  clearInterval(cTimer);\n"
+        "                  window._roooAutoLoginRunning = false;\n"
+        "                  return;\n"
+        "                }\n"
+        "                var nowU = getU();\n"
+        "                var nowP = getP();\n"
+        "                if(nowU && nowU.value !== U_VAL) setReactValue(nowU, U_VAL);\n"
+        "                if(nowP && nowP.value !== P_VAL) setReactValue(nowP, P_VAL);\n"
+        "                clickLoginBtn();\n"
+        "              }, 1200);\n"
+        "            }, 300);\n"
+        "          }\n"
+        "        }, 150);\n"
+        "      }, 300);\n"
+        "    } else if(tries > 50){\n"
         "      clearInterval(timer);\n"
         "      window._roooAutoLoginRunning = false;\n"
         "    }\n"
-        "  }, 350);\n"
+        "  }, 300);\n"
         "})();";
 
-    size_t total = strlen(tmpl) + (strlen(esc_u) + strlen(esc_p)) * 3 + 128;
+    size_t total = strlen(tmpl) + strlen(esc_u) + strlen(esc_p) + 64;
     char *js = (char *)malloc(total);
     if (!js) return NULL;
-    snprintf(js, total, tmpl, esc_u, esc_p, esc_u, esc_u, esc_p, esc_p);
+    snprintf(js, total, tmpl, esc_u, esc_p);
     return js;
 }
 

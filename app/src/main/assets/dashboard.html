@@ -46,17 +46,6 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
 <div class="bar">
   <button onclick="openSel()" style="background:#1d7a34">▶ เปิด (ล็อกอินอัตโนมัติ)</button>
   <button class="check" onclick="checkCookie()">🍪 เช็ค cookie</button>
-  <div style="display:inline-flex;align-items:center;gap:4px;background:#1e1e1e;padding:4px 8px;border-radius:8px;border:1px solid #444">
-    <span style="font-size:12px;color:#bbb">พร้อมกัน:</span>
-    <select id="concurrency" style="padding:4px 6px;font-size:12px;background:#2a2a2a;color:#fff;border:1px solid #555;border-radius:6px">
-      <option value="1">1 ไอดี</option>
-      <option value="2" selected>2 ไอดี</option>
-      <option value="4">4 ไอดี</option>
-      <option value="6">6 ไอดี</option>
-      <option value="8">8 ไอดี</option>
-      <option value="10">10 ไอดี</option>
-    </select>
-  </div>
   <button class="sheet" onclick="$('csvFile').click()">📂 นำเข้า</button>
   <button class="sheet" onclick="exportSheetCsv()">📊 ส่งออก</button>
   <span id="dlog" class="note" style="width:100%"></span>
@@ -87,7 +76,7 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
 </details>
 
 <div class="note" style="margin-bottom:10px;background:#252525;padding:10px;border-radius:8px">
-  กด <b>▶ เปิด</b> → ระบบกรอก/ล็อกอิน/ดึง cookie ให้อัตโนมัติ · รองรับเปิดพร้อมกัน <b>1, 2, 4, 6, 8, 10 ไอดี</b> · ติด <b>LOCKED / RECOVERY / 2FA / CAPTCHA</b> ข้ามทันที · ถ้าติด <b>VERIFY (Press and hold)</b> จะรอกดเองในหน้าต่าง (ให้เวลา <b>30 วินาที</b>) · หากค้างเกิน 30 วิจะข้ามอัตโนมัติ · กด<b>ปุ่มย้อนกลับของมือถือ</b> หรือ<b>กดค้าง "ปิด / ถัดไป"</b> เพื่อหยุดกลางทางและกลับหน้าหลัก
+  กด <b>▶ เปิด</b> → ระบบกรอก/ล็อกอิน/ดึง cookie ให้อัตโนมัติ · ถ้า<b>รหัสไม่ตรง</b>หรือ<b>เกิดข้อผิดพลาดไม่ทราบสาเหตุ</b>จะ<b>รีเซ็ตหน้าลองใหม่อัตโนมัติ</b> · ถ้าครบ <b>10 วินาที</b>แล้วยังไม่ผ่านและไม่ติดกดเพื่อยืนยันจะ<b>ข้ามไอดีนั้น</b> · ถ้าติด <b>กดเพื่อยืนยัน (Press and hold)</b> สามารถกดยืนยันเองในหน้าต่างได้ · กด <b>หน้าหลัก</b> บนแถบเพื่อหยุดกลางทาง
 </div>
 
 <div class="table-wrap">
@@ -169,15 +158,15 @@ function nativeDispatch(path, data) {
       return {ok: true};
     }
     if (path === '/api/check') {
-      window.NativeApp.checkAccountsQueue(JSON.stringify(data.indices || []), data.concurrency || 2);
+      window.NativeApp.checkAccountsQueue(JSON.stringify(data.indices || []));
       return {ok: true};
     }
     if (path === '/api/check_cookie') {
-      window.NativeApp.checkCookies(JSON.stringify(data.indices || []), data.concurrency || 5);
+      window.NativeApp.checkCookies(JSON.stringify(data.indices || []));
       return {ok: true};
     }
     if (path === '/api/open') {
-      window.NativeApp.openAccountsQueue(JSON.stringify(data.indices || []), !!data.incognito, data.concurrency || 2);
+      window.NativeApp.openAccountsQueue(JSON.stringify(data.indices || []), !!data.incognito);
       return {ok: true, opened: data.indices || [], failed: []};
     }
     if (path === '/api/manual_open') {
@@ -186,7 +175,7 @@ function nativeDispatch(path, data) {
       return {ok: true, port: 'WebView'};
     }
     if (path === '/api/dump') {
-      window.NativeApp.dumpCookiesQueue(JSON.stringify(data.indices || []), data.concurrency || 2);
+      window.NativeApp.dumpCookiesQueue(JSON.stringify(data.indices || []));
       return {ok: true, job: 'native'};
     }
     if (path === '/api/grab') {
@@ -285,39 +274,29 @@ async function one(i, act) {
   }
 }
 
-function getConcurrency() {
-  const el = $('concurrency');
-  const v = parseInt(el ? el.value : '2', 10);
-  return (v >= 1 && v <= 10) ? v : 2;
-}
-
 async function checkCookie() {
   if (!rows.length) return alert('ยังไม่มีไอดี');
   const sel = selIdx();
   const idxs = sel.length ? sel : rows.map((_, k) => k);
-  const c = getConcurrency();
-  $('dlog').textContent = 'กำลังเช็ค cookie ' + idxs.length + ' ไอดี (พร้อมกัน ' + c + ' threads)...';
-  await api('/api/check_cookie', {indices: idxs, concurrency: c});
+  $('dlog').textContent = 'กำลังเช็ค cookie ' + idxs.length + ' ไอดี (เทียบกับชื่อในชีต)...';
+  await api('/api/check_cookie', {indices: idxs});
   setTimeout(load, 1500);
 }
 
 async function verifySel() {
-  const i = selIdx();
   if (!i.length) return alert('เลือกไอดีก่อน (ช่องซ้ายสุด)');
   const bad = i.filter(k => !rows[k] || !rows[k].username || !rows[k].password);
   if (bad.length) return alert('ไอดีที่เลือกบางแถวไม่มีรหัส — ตรวจรหัสไม่ได้ (แถว: ' + bad.map(k => k + 1).join(', ') + ')');
-  const c = getConcurrency();
-  $('dlog').textContent = 'กำลังตรวจรหัส:ชื่อ ' + i.length + ' ไอดี (พร้อมกัน ' + c + ' ช่อง)...';
-  await api('/api/check', {indices: i, concurrency: c});
+  $('dlog').textContent = 'กำลังตรวจรหัส:ชื่อ ' + i.length + ' ไอดี (ล็อกอินด้วยรหัส ไม่ใช้ cookie)...';
+  await api('/api/check', {indices: i});
   load();
 }
 
 async function openSel() {
   const i = selIdx();
   if (!i.length) return alert('เลือกไอดีก่อน (ช่องซ้ายสุด)');
-  const c = getConcurrency();
-  $('dlog').textContent = 'กำลังเปิด ' + i.length + ' ไอดี (พร้อมกัน ' + c + ' ช่อง)...';
-  await api('/api/open', {indices: i, incognito: true, concurrency: c});
+  $('dlog').textContent = 'กำลังเปิด ' + i.length + ' ไอดี...';
+  await api('/api/open', {indices: i, incognito: true});
   load();
 }
 
@@ -415,9 +394,8 @@ function copySheetTsv() {
 async function dumpSel() {
   const i = selIdx();
   if (!i.length) return alert('เลือกไอดีก่อน (ช่องซ้ายสุด)');
-  const c = getConcurrency();
-  $('dlog').textContent = 'กำลังเปิดหน้าล็อกอินและดึง cookie ' + i.length + ' ไอดี (พร้อมกัน ' + c + ' ช่อง)...';
-  await api('/api/dump', {indices: i, incognito: true, concurrency: c});
+  $('dlog').textContent = 'กำลังเปิดหน้าล็อกอินและดึง cookie ' + i.length + ' ไอดี...';
+  await api('/api/dump', {indices: i, incognito: true});
   setTimeout(load, 1200);
 }
 
