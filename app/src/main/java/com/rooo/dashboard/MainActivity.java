@@ -55,37 +55,41 @@ public class MainActivity extends Activity {
 
     private static final String JS_INSPECT_PAGE =
             "(function(){" +
-            "  function deep(el, depth){" +
-            "    var out = '';" +
-            "    if(!el || depth > 3) return out;" +
-            "    try { out += (el.innerText || el.textContent || '') + '\\n'; } catch(e){}" +
-            "    try { if(el.shadowRoot) out += deep(el.shadowRoot, depth + 1); } catch(e){}" +
-            "    return out;" +
+            "  function deep(el, depth, out){" +
+            "    if(!el || depth > 4) return;" +
+            "    try { var t = el.innerText || el.textContent || ''; if(t) out.push(t); } catch(e){}" +
+            "    try { if(el.shadowRoot) deep(el.shadowRoot, depth + 1, out); } catch(e){}" +
             "  }" +
-            "  var dlg = '';" +
+            "  var parts = [];" +
+            "  try { if(document.title) parts.push(document.title); } catch(e){}" +
             "  try {" +
-            "    var sels = ['[role=\"dialog\"]','[class*=modal]','[class*=Modal]','[data-testid*=modal]'];" +
-            "    sels.forEach(function(s){" +
-            "      try {" +
-            "        document.querySelectorAll(s).forEach(function(el){ dlg += deep(el, 0) + '\\n'; });" +
-            "      } catch(e){}" +
-            "    });" +
+            "    var sels = ['[role=dialog]','[class*=modal]','[class*=Modal]','[data-testid*=modal]','[class*=alert]','[class*=Alert]','[class*=notification]','[class*=Notification]'];" +
+            "    for (var s = 0; s < sels.length; s++) {" +
+            "      try { document.querySelectorAll(sels[s]).forEach(function(el){ deep(el, 0, parts); }); } catch(e){}" +
+            "    }" +
             "  } catch(e){}" +
+            "  try {" +
+            "    var nodes = document.querySelectorAll('*');" +
+            "    for (var i = 0; i < nodes.length; i++) {" +
+            "      var host = nodes[i];" +
+            "      var sr = null;" +
+            "      try { sr = host.shadowRoot; } catch(e){}" +
+            "      if (sr) deep(sr, 0, parts);" +
+            "    }" +
+            "  } catch(e){}" +
+            "  try { if(document.body) parts.push(document.body.innerText || ''); } catch(e){}" +
             "  try {" +
             "    Array.from(document.querySelectorAll('iframe')).forEach(function(f){" +
-            "      try { var d = f.contentDocument; if(d && d.body) dlg += deep(d.body, 0) + '\\n'; } catch(e){}" +
+            "      try { var d = f.contentDocument; if(d && d.body) parts.push(d.body.innerText || ''); } catch(e){}" +
             "    });" +
             "  } catch(e){}" +
-            "  var txt = '';" +
-            "  try { txt = deep(document.body, 0); } catch(e){}" +
             "  var ark = false;" +
             "  try {" +
             "    ark = Array.from(document.querySelectorAll('iframe')).some(function(f){" +
             "      return /arkose|funcaptcha|captcha/i.test(f.src || '') && (f.offsetWidth > 0 || f.offsetHeight > 0);" +
             "    });" +
             "  } catch(e){}" +
-            "  var all = dlg + '\\n' + txt;" +
-            "  return JSON.stringify({url: location.href, text: all.slice(0, 12000), arkose: ark});" +
+            "  return JSON.stringify({url: location.href, text: parts.join('\\n').slice(0, 16000), arkose: ark});" +
             "})();";
 
     private WebView dashWebView;
@@ -103,6 +107,8 @@ public class MainActivity extends Activity {
     private boolean currentCleanSession = true;
     private boolean currentAutoFill = true;
     private boolean autoCheckMode = false;
+    private boolean autoAdvanceMode = false;
+    private boolean advanceScheduled = false;
     private String noticedStatus = "";
     private String lastStatus = "";
     private String lastNote = "";
@@ -216,23 +222,7 @@ public class MainActivity extends Activity {
         topBar.addView(titleCol, titleLp);
 
         Button btnGrab = makeBarButton("ดึง Cookie", "#1d7a34");
-        btnGrab.setOnClickListener(v -> {
-            int got = grabCookieInternal();
-            if (got > 0) {
-                boolean ok = "WORK".equals(lastGrabStatus);
-                browserStatusBadge.setText("สถานะ: " + lastGrabStatus + " (บันทึก Cookie แล้ว)");
-                browserStatusBadge.setTextColor(Color.parseColor(ok ? "#44ff77" : "#ff8844"));
-                if (ok) {
-                    notifyDashboard("ดึง cookie สำเร็จ!");
-                } else {
-                    notifyDashboard("บันทึก cookie แล้ว แต่สถานะคือ " + lastGrabStatus
-                            + " — " + (lastNote != null && lastNote.length() > 0 ? lastNote : "กด Continue/ยืนยันในหน้าต่างก่อน"));
-                }
-            } else {
-                inspectCurrentRobloxPage();
-                notifyDashboard("ยังไม่มี cookie — เช็คสถานะบนแถบด้านบน");
-            }
-        });
+        btnGrab.setOnClickListener(v -> grabAndGoNext());
         topBar.addView(btnGrab);
 
         Button btnRetry = makeBarButton("ลองใหม่", "#8a5a00");
@@ -335,6 +325,17 @@ public class MainActivity extends Activity {
                 String st = res.optString("status", "UNKNOWN");
                 String note = res.optString("note", "");
                 boolean hasCk = res.optBoolean("hasCookie", false);
+
+                // หน้า Security Notification (ไอดีถูกล็อกชั่วคราว) — จับใน Java อีกชั้น
+                // เผื่อ native classifier อ่านข้อความไม่ครบ แล้วเผลอบันทึกเป็น WORK
+                boolean secLock = looksLikeSecurityLock(pageText);
+                if (secLock) {
+                    st = "LOCKED";
+                    note = "ไอดีถูกล็อก (Security Notification) — กด 'Recover your account' ในหน้าต่าง";
+                    hasCk = false;
+                    if (idx >= 0) NativeBridge.updateStatus(idx, "LOCKED", note);
+                }
+
                 lastStatus = st;
                 lastNote = note;
 
@@ -344,8 +345,9 @@ public class MainActivity extends Activity {
                     browserStatusBadge.setText("สถานะ: " + st + " — " + note);
                     browserStatusBadge.setTextColor(Color.parseColor("#44ff77"));
                     notifyDashboard(null);
-                    if (autoCheckMode && (System.currentTimeMillis() - accountOpenedAt > 4000)) {
-                        mainHandler.postDelayed(this::closeAndOpenNextAccount, 700);
+                    if ((autoCheckMode || autoAdvanceMode)
+                            && (System.currentTimeMillis() - accountOpenedAt > 3000)) {
+                        scheduleAdvance(1200);
                     }
                     return;
                 }
@@ -406,6 +408,27 @@ public class MainActivity extends Activity {
                         skipScheduled = true;
                         notifyDashboard("ลองใหม่ครบ 3 ครั้งแล้วยังติด " + st + " — ข้ามไอดีนี้");
                         mainHandler.postDelayed(this::skipCurrentAccount, 1200);
+                    }
+                    return;
+                }
+
+                // 4.5 สถานะล็อก/แบน/2FA — หยุดรอ ไม่รีลองใหม่
+                if ("LOCKED".equals(st) || "BAN".equals(st) || "2FA".equals(st)) {
+                    browserStatusBadge.setText("สถานะ: " + st + " — " + note);
+                    browserStatusBadge.setTextColor(Color.parseColor("BAN".equals(st) ? "#ff5555" : "#ff8844"));
+                    // หน้า Security Notification (กู้คืนบัญชี) กับ BAN = ใช้งานไม่ได้แล้ว
+                    // จึงไปไอดีถัดไปให้เอง (ถ้ามีคิวเหลือ) ส่วน "ยืนยันว่าเป็นมนุษย์" / 2FA ต้องรอผู้ใช้กดเอง
+                    boolean hasNext = autoAdvanceMode || !accountQueue.isEmpty();
+                    if (hasNext && (secLock || "BAN".equals(st))) {
+                        if (!noticedStatus.equals(st)) {
+                            noticedStatus = st;
+                            notifyDashboard("ติด " + st + " — ตรวจไอดีที่เหลือให้อัตโนมัติ");
+                        } else {
+                            notifyDashboard(null);
+                        }
+                        scheduleAdvance(4000);
+                    } else {
+                        notifyDashboard(null);
                     }
                     return;
                 }
@@ -491,7 +514,8 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void startAccountQueue(int[] idxs, boolean cleanSession, boolean autoFill, boolean isCheckMode) {
+    private void startAccountQueue(int[] idxs, boolean cleanSession, boolean autoFill,
+                                   boolean isCheckMode, boolean autoAdvance) {
         accountQueue.clear();
         int total = NativeBridge.getAccountCount();
         if (idxs != null && idxs.length > 0) {
@@ -507,6 +531,8 @@ public class MainActivity extends Activity {
         currentCleanSession = cleanSession;
         currentAutoFill = autoFill;
         autoCheckMode = isCheckMode;
+        autoAdvanceMode = autoAdvance;
+        advanceScheduled = false;
 
         if (!accountQueue.isEmpty()) {
             int first = accountQueue.remove(0);
@@ -527,6 +553,7 @@ public class MainActivity extends Activity {
         loginCycleStart = 0;
         lastRetryAt = 0;
         skipScheduled = false;
+        advanceScheduled = false;
         isVerifyWaiting = false;
         verifyStartTime = 0;
         openToken++;
@@ -582,6 +609,9 @@ public class MainActivity extends Activity {
         String combined = (raw1 != null ? raw1 : "") + "; " + (raw2 != null ? raw2 : "");
         String user = activeAccountIdx >= 0
                 ? NativeBridge.getAccountField(activeAccountIdx, "username") : "";
+        // อ่านสถานะเดิมก่อนบันทึก (ตัวบันทึก cookie จะเขียนทับเป็น WORK ทันที)
+        String dbSt = activeAccountIdx >= 0
+                ? NativeBridge.getAccountField(activeAccountIdx, "status") : "";
         int savedIdx = NativeBridge.storeCookieFromHeader(
                 activeAccountIdx, user, combined, "ดึงจากหน้าต่างในแอป");
         if (savedIdx >= 0) {
@@ -589,14 +619,119 @@ public class MainActivity extends Activity {
             String note = "ดึงจากหน้าต่างในแอป";
             if (isBlockingStatus(st)) {
                 if (lastNote != null && lastNote.length() > 0) note = lastNote;
+            } else if (isBlockingStatus(dbSt)) {
+                // หน้าเว็บยังไม่ได้ตรวจ หรือตรวจไม่ทัน — ห้ามทับสถานะล็อก/แบน/ยืนยันด้วย WORK
+                st = dbSt;
+                note = "คงสถานะเดิม " + dbSt + " — ยังไม่ยืนยันว่าใช้งานได้";
             } else {
                 st = "WORK";
+                note = "ดึงและบันทึก Cookie สำเร็จแล้ว";
             }
             NativeBridge.updateStatus(savedIdx, st, note);
             lastGrabStatus = st;
             lastNote = note;
         }
         return savedIdx >= 0 ? 1 : 0;
+    }
+
+    /*
+     * ปุ่ม "ดึง Cookie": สแกนหน้าล่าสุด 1 ครั้งก่อน (กันจับสถานะไม่ทัน)
+     * แล้วบันทึก cookie + พาไปไอดีถัดไปในคิวให้อัตโนมัติ
+     */
+    private void grabAndGoNext() {
+        if (!browserOpen) {
+            notifyDashboard("ยังไม่มีหน้าต่างที่เปิดอยู่ — เปิดไอดีก่อน");
+            return;
+        }
+        final int idx = activeAccountIdx;
+        browserStatusBadge.setText("กำลังสแกนหน้าเว็บก่อนดึง cookie...");
+        browserStatusBadge.setTextColor(Color.parseColor("#99ccff"));
+        inspectCurrentRobloxPage();
+        mainHandler.postDelayed(() -> {
+            if (!browserOpen || activeAccountIdx != idx) return;
+            int got = grabCookieInternal();
+            if (got <= 0) {
+                notifyDashboard("ยังไม่มี cookie — เช็คสถานะบนแถบด้านบน");
+                return;
+            }
+            boolean ok = "WORK".equals(lastGrabStatus);
+            browserStatusBadge.setText("สถานะ: " + lastGrabStatus
+                    + (ok ? " — บันทึก Cookie แล้ว" : " — " + lastNote));
+            browserStatusBadge.setTextColor(Color.parseColor(ok ? "#44ff77" : "#ff8844"));
+            notifyDashboard(ok
+                    ? "ดึง cookie สำเร็จ — ไปไอดีถัดไป"
+                    : "บันทึก cookie แล้ว (สถานะ " + lastGrabStatus + ") — ไปไอดีถัดไป");
+            scheduleAdvance(1000);
+        }, 500);
+    }
+
+    /* หน่วงเวลาแล้วไปไอดีถัดไป (กันสั่งซ้ำ/ข้ามไอดี) */
+    private void scheduleAdvance(int delayMs) {
+        if (!browserOpen || advanceScheduled) return;
+        final int token = openToken;
+        advanceScheduled = true;
+        mainHandler.postDelayed(() -> {
+            if (token == openToken && browserOpen) closeAndOpenNextAccount();
+        }, delayMs);
+    }
+
+    /* ไปไอดีถัดไปในคิว โดยไม่ดึง cookie ซ้ำ */
+    private void advanceToNext() {
+        if (!browserOpen) return;
+        if (!accountQueue.isEmpty()) {
+            int nextIdx = accountQueue.remove(0);
+            openAccountInWebView(nextIdx, currentCleanSession, currentAutoFill);
+        } else {
+            stopQueueAndCloseBrowser();
+            notifyDashboard("ครบทุกไอดีในคิวแล้ว!");
+        }
+    }
+
+    /* ข้อความหน้า "Security Notification" — จับซ้ำอีกชั้นในฝั่ง Java */
+    private static final String[] SECURITY_LOCK_MARKERS = {
+            "securitynotification",
+            "detectedsuspiciousactivity",
+            "temporarilylocked",
+            "temporarilylock",
+            "credentialsmayhavebeencompromised",
+            "recoveryouraccounttoregainaccess",
+            "accounthasbeenlocked",
+            "accountislocked",
+            "accountlocked",
+            "บัญชีถูกล็อก",
+            "ถูกล็อกชั่วคราว",
+            "ล็อกบัญชีชั่วคราว",
+            "กิจกรรมที่น่าสงสัย",
+            "การแจ้งเตือนด้านความปลอดภัย",
+            "การแจ้งเตือนความปลอดภัย"
+    };
+
+    private static boolean looksLikeSecurityLock(String text) {
+        if (text == null || text.isEmpty()) return false;
+        StringBuilder sb = new StringBuilder(text.length());
+        for (int i = 0; i < text.length(); i++) {
+            char c = Character.toLowerCase(text.charAt(i));
+            if (Character.isWhitespace(c) || c == '\u00a0' || c == '\u200b'
+                    || c == '\u200c' || c == '\u200d' || c == '\ufeff') {
+                continue;
+            }
+            sb.append(c);
+        }
+        String flat = sb.toString();
+        if (flat.isEmpty()) return false;
+        boolean hasLocked = flat.contains("locked") || flat.contains("ล็อก");
+        for (String marker : SECURITY_LOCK_MARKERS) {
+            if (!flat.contains(marker)) continue;
+            if ("securitynotification".equals(marker)) {
+                if (hasLocked || flat.contains("suspicious") || flat.contains("น่าสงสัย")
+                        || flat.contains("recover") || flat.contains("regainaccess")) {
+                    return true;
+                }
+                continue;
+            }
+            return true;
+        }
+        return false;
     }
 
     /* ---------- เช็ค cookie ว่าตรงกับชื่อในชีตไหม ---------- */
@@ -757,6 +892,9 @@ public class MainActivity extends Activity {
             if ("RECOVERY".equals(st) || "BADPASS".equals(st)) {
                 return;
             }
+            if ("LOCKED".equals(st) || "BAN".equals(st) || "2FA".equals(st)) {
+                return;
+            }
 
             // ครบ 10 วิ แล้วไม่เข้า VERIFY: ให้รีลองใหม่ 3 ครั้ง
             if (autoRetryCount < 3) {
@@ -810,16 +948,10 @@ public class MainActivity extends Activity {
 
     /* กด "ปิด / ถัดไป ⏭": เซฟ cookie ก่อนแล้วเปิดไอดีถัดไปในคิว */
     private void closeAndOpenNextAccount() {
+        if (!browserOpen) return;
         grabCookieInternal();
         notifyDashboard(null);
-
-        if (!accountQueue.isEmpty()) {
-            int nextIdx = accountQueue.remove(0);
-            openAccountInWebView(nextIdx, currentCleanSession, currentAutoFill);
-        } else {
-            stopQueueAndCloseBrowser();
-            notifyDashboard("ครบทุกไอดีในคิวแล้ว!");
-        }
+        advanceToNext();
     }
 
     /* หยุดการทำงานทั้งหมดและกลับหน้าหลัก (หยุดกลางทาง) */
@@ -829,6 +961,8 @@ public class MainActivity extends Activity {
         browserOpen = false;
         autoFillPending = false;
         autoCheckMode = false;
+        autoAdvanceMode = false;
+        advanceScheduled = false;
         openToken++;
         mainHandler.removeCallbacks(stuckCheckRunnable);
         mainHandler.removeCallbacks(liveInspectorRunnable);
@@ -942,7 +1076,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void openAccountsQueue(String jsonIndices, boolean incognito) {
             int[] idxs = parseIntArray(jsonIndices);
-            runOnUiThread(() -> startAccountQueue(idxs, incognito, true, false));
+            runOnUiThread(() -> startAccountQueue(idxs, incognito, true, false, false));
         }
 
         @JavascriptInterface
@@ -953,7 +1087,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void checkAccountsQueue(String jsonIndices) {
             int[] idxs = parseIntArray(jsonIndices);
-            runOnUiThread(() -> startAccountQueue(idxs, true, true, true));
+            runOnUiThread(() -> startAccountQueue(idxs, true, true, true, false));
         }
 
         @JavascriptInterface
@@ -970,7 +1104,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void manualOpen(int idx, boolean incognito) {
             int[] idxs = idx >= 0 ? new int[]{idx} : null;
-            runOnUiThread(() -> startAccountQueue(idxs, incognito, false, false));
+            runOnUiThread(() -> startAccountQueue(idxs, incognito, false, false, false));
         }
 
         @JavascriptInterface
@@ -981,7 +1115,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void dumpCookiesQueue(String jsonIndices) {
             int[] idxs = parseIntArray(jsonIndices);
-            runOnUiThread(() -> startAccountQueue(idxs, true, true, false));
+            runOnUiThread(() -> startAccountQueue(idxs, true, true, false, true));
         }
 
         @JavascriptInterface

@@ -961,11 +961,41 @@ char *core_classify_page(int idx, const char *url, const char *page_text,
                   (on_login && (str_icontains_loose(t, "we couldn't find") ||
                                 str_icontains_loose(t, "doesn't exist") ||
                                 str_icontains_loose(t, "does not exist")));
-    int locked = str_icontains_loose(t, "account locked") ||
+    /* หน้า "Security Notification" ของ Roblox:
+     * "We've detected suspicious activity on your account or signs that your
+     *  credentials may have been compromised. To protect your account, we've
+     *  temporarily locked it. Please recover your account to regain access."
+     * ต้องจับให้ได้ก่อนเช็ค cookie ว่าใช้ได้ (ไม่งั้นจะถูกบันทึกเป็น WORK) */
+    int security_lock =
+        (str_icontains_loose(t, "security notification") &&
+         (str_icontains_loose(t, "locked") ||
+          str_icontains_loose(t, "suspicious") ||
+          str_icontains_loose(t, "recover"))) ||
+        str_icontains_loose(t, "temporarily locked") ||
+        str_icontains_loose(t, "temporarily lock") ||
+        str_icontains_loose(t, "detected suspicious activity") ||
+        str_icontains_loose(t, "credentials may have been compromised") ||
+        (str_icontains_loose(t, "recover your account") &&
+         (str_icontains_loose(t, "locked") ||
+          str_icontains_loose(t, "regain access"))) ||
+        str_icontains_loose(t, "recover your account to regain access") ||
+        str_icontains_loose(t, "การแจ้งเตือนด้านความปลอดภัย") ||
+        str_icontains_loose(t, "การแจ้งเตือนความปลอดภัย") ||
+        str_icontains_loose(t, "ถูกล็อกชั่วคราว") ||
+        str_icontains_loose(t, "ล็อกบัญชีชั่วคราว") ||
+        str_icontains_loose(t, "กู้คืนบัญชีเพื่อกลับเข้าใช้งาน");
+
+    int locked = security_lock ||
+                 str_icontains(u, "security-notification") ||
+                 str_icontains(u, "account-locked") ||
+                 str_icontains_loose(t, "account locked") ||
+                 str_icontains_loose(t, "account is locked") ||
                  str_icontains_loose(t, "account has been locked") ||
                  str_icontains_loose(t, "account was locked") ||
+                 str_icontains_loose(t, "locked your account") ||
                  str_icontains_loose(t, "unlock your account") ||
                  str_icontains_loose(t, "suspicious activity") ||
+                 str_icontains_loose(t, "unusual activity") ||
                  str_icontains_loose(t, "confirming that you're a human") ||
                  str_icontains_loose(t, "confirm that you're a human") ||
                  str_icontains_loose(t, "บัญชีถูกล็อก") ||
@@ -986,7 +1016,9 @@ char *core_classify_page(int idx, const char *url, const char *page_text,
         note = "ไอดีถูกแบน / ระงับการใช้งาน (BAN)";
     } else if (locked) {
         status = "LOCKED";
-        note = "ไอดีถูกล็อก (Account locked / suspicious activity) — กด Continue แล้วยืนยันว่าเป็นคนในหน้าต่าง";
+        note = security_lock
+             ? "ไอดีถูกล็อก (Security Notification) — กด 'Recover your account' ในหน้าต่าง หรือกด 'ปิด / ถัดไป' เพื่อข้าม"
+             : "ไอดีถูกล็อก (Account locked / suspicious activity) — กด Continue แล้วยืนยันว่าเป็นคนในหน้าต่าง";
     } else if (badpass) {
         status = "BADPASS";
         note = "รหัสไม่ตรงกับชื่อผู้ใช้ (ชื่อมีอยู่ แต่รหัสผ่านผิด)";
