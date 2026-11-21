@@ -112,6 +112,8 @@ public class MainActivity extends Activity {
     private long lastRetryAt = 0;
     private int openToken = 0;
     private boolean skipScheduled = false;
+    private long verifyStartTime = 0;
+    private boolean isVerifyWaiting = false;
 
     private final List<Integer> accountQueue = new ArrayList<>();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -336,52 +338,81 @@ public class MainActivity extends Activity {
                 lastStatus = st;
                 lastNote = note;
 
-                // รีเซ็ตหน้าเว็บลองใหม่อัตโนมัติ: เฉพาะกรณี "รหัสไม่ตรง" (BADPASS) หรือ "เกิดข้อผิดพลาดไม่ทราบสาเหตุ" (RETRY) เท่านั้น
-                if ("BADPASS".equals(st) || "RETRY".equals(st)) {
-                    maybeAutoRetry(st);
-                }
-
+                // 1. ถ้าได้ Cookie แล้ว → WORK สำเร็จ
                 if (hasCk) {
+                    isVerifyWaiting = false;
                     browserStatusBadge.setText("สถานะ: " + st + " — " + note);
                     browserStatusBadge.setTextColor(Color.parseColor("#44ff77"));
                     notifyDashboard(null);
                     if (autoCheckMode && (System.currentTimeMillis() - accountOpenedAt > 4000)) {
                         mainHandler.postDelayed(this::closeAndOpenNextAccount, 700);
                     }
-                } else if ("VERIFY".equals(st) || "CAPTCHA".equals(st)) {
-                    // ติดกดเพื่อยืนยัน หรือ Verifying not a bot / Captcha — ให้ผู้ใช้กดเองในหน้าต่างได้ ไม่รีเซ็ต ไม่ตัดข้าม
+                    return;
+                }
+
+                // 2. ข้ามแต่ รีโคบเวอร์ลี กับ รหัสไม่ตรง (ไม่รีลองใหม่)
+                if (isSkipStatus(st)) {
+                    isVerifyWaiting = false;
+                    String hex = "BADPASS".equals(st) ? "#ff6666" : "#ff8844";
                     browserStatusBadge.setText("สถานะ: " + st + " — " + note);
+                    browserStatusBadge.setTextColor(Color.parseColor(hex));
+                    notifyDashboard(null);
+                    if (!noticedStatus.equals(st)) {
+                        noticedStatus = st;
+                        notifyDashboard("ติด " + st + " — ข้ามไอดีนี้ ไปตัวถัดไป");
+                    }
+                    if (!skipScheduled) {
+                        skipScheduled = true;
+                        mainHandler.postDelayed(this::skipCurrentAccount, 1000);
+                    }
+                    return;
+                }
+
+                // 3. ถ้าเข้า VERIFY (ติดกดเพื่อยืนยัน / Verifying you're not a bot / Captcha)
+                if ("VERIFY".equals(st) || "CAPTCHA".equals(st)) {
+                    if (!isVerifyWaiting) {
+                        isVerifyWaiting = true;
+                        verifyStartTime = System.currentTimeMillis();
+                    }
+                    long elapsed = (System.currentTimeMillis() - verifyStartTime) / 1000;
+                    long rem = Math.max(0, 45 - elapsed);
+                    browserStatusBadge.setText("สถานะ: VERIFY (" + rem + "s/45s) — " + note);
                     browserStatusBadge.setTextColor(Color.parseColor("#ffaa00"));
                     notifyDashboard(null);
-                } else if (!"UNKNOWN".equals(st)) {
-                    browserStatusBadge.setText("สถานะ: " + st + " — " + note);
 
-                    if (isSkipStatus(st)) {
-                        /* LOCKED / RECOVERY / 2FA / BAN → ข้ามไอดีนี้ (ไม่รีเซ็ตหน้า) */
-                        browserStatusBadge.setTextColor(Color.parseColor("#ff8844"));
-                        notifyDashboard(null);
-                        if (!noticedStatus.equals(st)) {
-                            noticedStatus = st;
-                            notifyDashboard("ติด " + st + " — ข้ามไอดีนี้ ไปตัวถัดไป");
-                        }
-                        if (!skipScheduled) {
+                    // ถ้าเกิน 45s ให้รีทิ้งแล้วลองใหม่ (สูงสุด 3 ครั้ง)
+                    if (elapsed >= 45) {
+                        if (autoRetryCount < 3) {
+                            isVerifyWaiting = false;
+                            retryLoginNow("ติด VERIFY เกิน 45 วินาที");
+                        } else if (!skipScheduled) {
                             skipScheduled = true;
+                            notifyDashboard("ติด VERIFY (ลองใหม่ครบ 3 ครั้งแล้ว) — ข้ามไอดีนี้");
                             mainHandler.postDelayed(this::skipCurrentAccount, 1200);
                         }
-                    } else if ("BADPASS".equals(st)) {
-                        browserStatusBadge.setTextColor(Color.parseColor("#ff6666"));
-                        notifyDashboard(null);
-                    } else if ("RETRY".equals(st)) {
-                        browserStatusBadge.setTextColor(Color.parseColor("#ffcc44"));
-                        notifyDashboard(null);
-                    } else if ("RATE".equals(st)) {
-                        browserStatusBadge.setTextColor(Color.parseColor("#ffaa44"));
-                        notifyDashboard(null);
                     }
-                } else {
-                    browserStatusBadge.setText("กำลังล็อกอิน / ตรวจสอบสถานะ...");
-                    browserStatusBadge.setTextColor(Color.parseColor("#99ccff"));
+                    return;
                 }
+
+                // 4. ที่เหลือ ถ้าไม่เข้า VERIFY (เช่น RETRY / An unknown error / RATE) → รีลองใหม่ 3 ครั้ง
+                isVerifyWaiting = false;
+                if ("RETRY".equals(st) || "RATE".equals(st)) {
+                    browserStatusBadge.setText("สถานะ: " + st + " — " + note);
+                    browserStatusBadge.setTextColor(Color.parseColor("#ffcc44"));
+                    notifyDashboard(null);
+                    if (autoRetryCount < 3) {
+                        maybeAutoRetry(st);
+                    } else if (!skipScheduled) {
+                        skipScheduled = true;
+                        notifyDashboard("ลองใหม่ครบ 3 ครั้งแล้วยังติด " + st + " — ข้ามไอดีนี้");
+                        mainHandler.postDelayed(this::skipCurrentAccount, 1200);
+                    }
+                    return;
+                }
+
+                // 5. อยู่หน้าล็อกอิน หรือสถานะอื่นๆ
+                browserStatusBadge.setText("กำลังล็อกอิน / ตรวจสอบสถานะ...");
+                browserStatusBadge.setTextColor(Color.parseColor("#99ccff"));
             } catch (Exception ignored) {
             }
         });
@@ -496,6 +527,8 @@ public class MainActivity extends Activity {
         loginCycleStart = 0;
         lastRetryAt = 0;
         skipScheduled = false;
+        isVerifyWaiting = false;
+        verifyStartTime = 0;
         openToken++;
         mainHandler.removeCallbacks(stuckCheckRunnable);
 
@@ -684,10 +717,9 @@ public class MainActivity extends Activity {
         }
     }
 
-    /* ข้ามไอดี: สถานะที่ไม่ต้องรอและไม่ต้องรีเซ็ตหน้า */
+    /* ข้ามเฉพาะ รีโคบเวอร์ลี กับ รหัสไม่ตรง เท่านั้น */
     private static boolean isSkipStatus(String st) {
-        return "LOCKED".equals(st) || "RECOVERY".equals(st)
-                || "2FA".equals(st) || "BAN".equals(st);
+        return "RECOVERY".equals(st) || "BADPASS".equals(st);
     }
 
     private void skipCurrentAccount() {
@@ -703,8 +735,8 @@ public class MainActivity extends Activity {
     }
 
     /*
-     * ถ้าครบ 10 วินาทีแล้วจากตรงล็อกอิน ไม่เปลี่ยนเป็นติดกดเพื่อยืนยัน (VERIFY)
-     * และยังไม่ได้ Cookie ให้เปลี่ยนเป็นเหมือนเดิม คือข้ามไอดีนั้นไปตัวถัดไป
+     * ถ้าครบ 10 วินาทีแล้วจากตรงล็อกอิน ไม่เข้า VERIFY (และไม่ได้ Cookie)
+     * ให้รีลองใหม่ 3 ครั้ง (ถ้าครบ 3 ครั้งแล้วจึงข้าม)
      */
     private final Runnable stuckCheckRunnable = new Runnable() {
         @Override
@@ -719,33 +751,36 @@ public class MainActivity extends Activity {
             String st = lastStatus != null ? lastStatus : "";
             if ("WORK".equals(st)) return;
             if ("VERIFY".equals(st) || "CAPTCHA".equals(st)) {
-                // ติดกดเพื่อยืนยัน หรือ Verifying not a bot / Captcha — ให้ผู้ใช้กดเองในหน้าต่าง ไม่ตัดข้าม ไม่รีเซ็ต
+                // ถ้าเข้า VERIFY แล้ว ให้ตัวจับเวลา 45s ของ VERIFY ดูแล
+                return;
+            }
+            if ("RECOVERY".equals(st) || "BADPASS".equals(st)) {
                 return;
             }
 
-            // ครบ 10 วินาทีแล้วยังไม่ผ่านและไม่ขึ้น Verify → ข้ามไอดีนี้เหมือนเดิม
-            skipScheduled = true;
-            browserStatusBadge.setText("ครบ 10 วินาทีแล้วยังไม่ผ่าน — ข้ามไอดีนี้");
-            browserStatusBadge.setTextColor(Color.parseColor("#ffcc44"));
-            notifyDashboard("ครบ 10 วินาทีแล้วยังไม่ผ่าน — ข้ามไอดีนี้");
-            mainHandler.postDelayed(() -> skipCurrentAccount(), 500);
+            // ครบ 10 วิ แล้วไม่เข้า VERIFY: ให้รีลองใหม่ 3 ครั้ง
+            if (autoRetryCount < 3) {
+                retryLoginNow("ไม่เข้า VERIFY ใน 10 วินาที");
+            } else {
+                skipScheduled = true;
+                browserStatusBadge.setText("ไม่เข้า VERIFY (ลองใหม่ครบ 3 ครั้งแล้ว) — ข้ามไอดีนี้");
+                browserStatusBadge.setTextColor(Color.parseColor("#ffcc44"));
+                notifyDashboard("ลองใหม่ครบ 3 ครั้งแล้วยังไม่เข้า VERIFY — ข้ามไอดีนี้");
+                mainHandler.postDelayed(() -> skipCurrentAccount(), 800);
+            }
         }
     };
 
-    /*
-     * ปรับแค่ "รหัสไม่ตรง" (BADPASS) กับ "เกิดข้อผิดพลาดไม่ทราบสาเหตุ" (RETRY) ที่รีเซ็ตหน้า
-     */
-    private void maybeAutoRetry(String st) {
+    private void maybeAutoRetry(String reason) {
         if (!browserOpen || !currentAutoFill || activeAccountIdx < 0) return;
-        if (!"BADPASS".equals(st) && !"RETRY".equals(st)) return;
         long now = System.currentTimeMillis();
         if (now - lastRetryAt < 3000) return;
-        if (autoRetryCount >= 2) return;
+        if (autoRetryCount >= 3) return;
         lastRetryAt = now;
-        retryLoginNow(st);
+        retryLoginNow(reason);
     }
 
-    /* รีเซ็ตหน้าเว็บและลองใหม่อัตโนมัติ (เฉพาะ BADPASS และ RETRY) */
+    /* รีเซ็ตหน้าเว็บและลองใหม่อัตโนมัติ (สูงสุด 3 ครั้ง) */
     private void retryLoginNow(String reason) {
         if (activeAccountIdx < 0) return;
         autoRetryCount++;
@@ -753,12 +788,14 @@ public class MainActivity extends Activity {
         lastStatus = "";
         noticedStatus = "";
         loginCycleStart = 0;
+        isVerifyWaiting = false;
+        verifyStartTime = 0;
         mainHandler.removeCallbacks(stuckCheckRunnable);
         mainHandler.removeCallbacks(liveInspectorRunnable);
-        String label = "BADPASS".equals(reason) ? "รหัสไม่ตรง" : "เกิดข้อผิดพลาดไม่ทราบสาเหตุ";
-        browserStatusBadge.setText("↻ ลองใหม่อัตโนมัติ (" + label + ") ครั้งที่ " + autoRetryCount + "/2");
+        String label = "RETRY".equals(reason) ? "เกิดข้อผิดพลาด" : reason;
+        browserStatusBadge.setText("↻ รีทิ้งลองใหม่ (" + label + ") ครั้งที่ " + autoRetryCount + "/3");
         browserStatusBadge.setTextColor(Color.parseColor("#ffcc44"));
-        notifyDashboard("ลองใหม่อัตโนมัติ (" + label + ") ครั้งที่ " + autoRetryCount + "/2");
+        notifyDashboard("↻ รีทิ้งลองใหม่ (" + label + ") ครั้งที่ " + autoRetryCount + "/3");
         clearBrowserSession(() -> {
             if (!browserOpen || token != openToken || activeAccountIdx < 0) return;
             robloxWebView.loadUrl("about:blank");
