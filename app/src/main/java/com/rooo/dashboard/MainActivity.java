@@ -331,12 +331,14 @@ public class MainActivity extends Activity {
                 lastStatus = st;
                 lastNote = note;
 
-                // 1. ถ้าได้ Cookie แล้ว → บันทึกแล้วไปไอดีถัดไป
+                // 1. ถ้าได้ Cookie แล้ว → บันทึกแล้วไปไอดีถัดไปทันที
+                //    (C classifier เซฟ cookie ลง DB ให้แล้วที่นี่ — เหลือแค่เดินคิว)
+                //    ต้องทำงานทุกโหมด รวมปุ่ม "▶ เปิด" ธรรมดาที่ autoCheck/autoAdvance เป็น false
                 if (hasCk) {
                     browserStatusBadge.setText("สถานะ: " + st + " — " + note);
                     browserStatusBadge.setTextColor(Color.parseColor("#44ff77"));
                     notifyDashboard(null);
-                    if (autoCheckMode || autoAdvanceMode) {
+                    if (autoCheckMode || autoAdvanceMode || !accountQueue.isEmpty()) {
                         scheduleAdvance(1200);
                     }
                     return;
