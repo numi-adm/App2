@@ -1003,15 +1003,24 @@ char *core_classify_page(int idx, const char *url, const char *page_text,
                  str_icontains_loose(t, "กิจกรรมที่น่าสงสัย") ||
                  str_icontains_loose(t, "ปลดล็อกบัญชี");
 
-    if (str_icontains_loose(t, "banned your account") ||
-        str_icontains_loose(t, "account has been banned") ||
-        str_icontains_loose(t, "account was banned") ||
-        str_icontains_loose(t, "permanently banned") ||
-        str_icontains_loose(t, "this account has been banned") ||
-        str_icontains_loose(t, "misusing roblox systems") ||
-        str_icontains_loose(t, "บัญชีถูกแบน") ||
-        str_icontains_loose(t, "ถูกแบน") ||
-        str_icontains(u, "not-approved")) {
+    int banned = str_icontains_loose(t, "banned your account") ||
+                 str_icontains_loose(t, "account has been banned") ||
+                 str_icontains_loose(t, "account was banned") ||
+                 str_icontains_loose(t, "permanently banned") ||
+                 str_icontains_loose(t, "this account has been banned") ||
+                 str_icontains_loose(t, "misusing roblox systems") ||
+                 str_icontains_loose(t, "บัญชีถูกแบน") ||
+                 str_icontains_loose(t, "ถูกแบน") ||
+                 str_icontains(u, "not-approved");
+
+    /* หลังกด Press and hold เสร็จ Roblox บางครั้งทิ้งข้อความ VERIFY ค้างใน DOM
+     * ทั้งที่ cookie ใช้ได้แล้ว → ต้องถือว่า WORK เพื่อให้ hasCookie=true
+     * (ไม่งั้นระบบจะไม่ดึง cookie แล้วไปต่อไอดีถัดไป) */
+    int confirmed_home = ck_len > 100 && !on_login && !on_recovery && !locked && !banned &&
+                         (str_icontains(u, "/home") || str_icontains(u, "/discover") ||
+                          str_icontains(u, "/charts"));
+
+    if (banned) {
         status = "BAN";
         note = "ไอดีถูกแบน / ระงับการใช้งาน (BAN)";
     } else if (locked) {
@@ -1025,6 +1034,9 @@ char *core_classify_page(int idx, const char *url, const char *page_text,
     } else if (on_recovery) {
         status = "RECOVERY";
         note = "ติด Recovery — ต้องกู้บัญชี/ยืนยันตัวตน (อีเมล/รหัสกู้คืน) กดเองในหน้าต่าง";
+    } else if (confirmed_home) {
+        status = "WORK";
+        note = "ยืนยันตัวตนเสร็จ — ดึงและบันทึก Cookie สำเร็จแล้ว";
     } else if (str_icontains_loose(t, "press and hold") ||
                str_icontains_loose(t, "hold the button") ||
                str_icontains_loose(t, "verify you're human") ||
