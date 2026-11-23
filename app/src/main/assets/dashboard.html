@@ -93,7 +93,9 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
       <input id="botHost" value="127.0.0.1" placeholder="IP เครื่องที่รัน MuMu / adb">
       <input id="botPort" type="number" value="16384" style="max-width:90px">
       <button onclick="botConnectUI()">🔌 เชื่อมต่อ</button>
-      <span id="botStat" class="note" style="width:100%">ยังไม่เชื่อมต่อ</span>
+      <button class="ghost" onclick="botAutoConnectUI()">⚡ ลองใหม่</button>
+      <label class="note" style="margin:0;white-space:nowrap"><input type="checkbox" id="botAuto" checked> auto-connect</label>
+      <span id="botStat" class="note" style="width:100%">กำลังเชื่อมต่อ ADB อัตโนมัติ...</span>
     </div>
     <div class="bot-grid">
       <select id="botMode" style="max-width:130px">
@@ -120,6 +122,8 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
       <button class="ghost" onclick="botCropMode=!botCropMode;toast(botCropMode?'แตะ/ลากบนภาพเพื่อเลือกกรอบ':'ปิดโหมดตัดภาพ')">✂️ ตัดภาพ</button>
       <button onclick="botAddTpl(false)">＋ ต้นแบบกด</button>
       <button onclick="botAddTpl(true)">＋ ต้นแบบปล่อย</button>
+      <button class="sheet" onclick="botPickTemplateUI(false)">📂 ไฟล์กด</button>
+      <button class="sheet" onclick="botPickTemplateUI(true)">📂 ไฟล์ปล่อย</button>
       <button class="ghost" onclick="botClear(false)">🗑 ล้างกด</button>
       <button class="ghost" onclick="botClear(true)">🗑 ล้างปล่อย</button>
     </div>
@@ -266,6 +270,14 @@ function nativeDispatch(path, data) {
     }
     if (path === '/api/bot_connect') {
       return JSON.parse(window.NativeApp.botConnect(data.host || '127.0.0.1', data.port || 16384) || '{"ok":false}');
+    }
+    if (path === '/api/bot_auto_connect') {
+      window.NativeApp.botAutoConnectNow();
+      return {ok: true};
+    }
+    if (path === '/api/bot_pick_template') {
+      window.NativeApp.botPickTemplate(!!data.release);
+      return {ok: true};
     }
     if (path === '/api/bot_status') {
       return JSON.parse(window.NativeApp.botStatus() || '{}');
@@ -562,6 +574,7 @@ function botCfg() {
   return {
     host: ($('botHost').value || '').trim() || '127.0.0.1',
     port: Math.round(num('botPort', 16384)),
+    autoConnect: !$('botAuto') || $('botAuto').checked,
     mode: $('botMode').value,
     tmThreshold: num('botThr', 0.8),
     colorHex: $('botColor').value || '#ffffff',
@@ -593,6 +606,20 @@ async function botConnectUI() {
   } catch (e) {
     $('botStat').textContent = 'เชื่อมต่อไม่สำเร็จ: ' + e;
   }
+}
+
+async function botAutoConnectUI() {
+  if ($('botStat')) $('botStat').textContent = 'กำลังลองเชื่อมต่ออัตโนมัติ...';
+  try {
+    await api('/api/bot_auto_connect', {});
+  } catch (e) {
+    if ($('botStat')) $('botStat').textContent = 'auto-connect ไม่สำเร็จ: ' + e;
+  }
+}
+
+async function botPickTemplateUI(release) {
+  await api('/api/bot_pick_template', {release: !!release});
+  toast('เลือกไฟล์ภาพต้นแบบ' + (release ? 'ปล่อย' : 'กด') + 'ได้เลย (เลือกหลายไฟล์ได้)');
 }
 
 async function botCaptureUI() {
@@ -771,6 +798,7 @@ async function botLoadCfgUI() {
   const c = j.config || {};
   const set = (id, v) => { if (v !== undefined && v !== null && $(id)) $(id).value = v; };
   set('botHost', c.host); set('botPort', c.port); set('botMode', c.mode);
+  if ($('botAuto')) $('botAuto').checked = c.autoConnect !== false;
   set('botThr', c.tmThreshold); set('botColor', c.colorHex);
   set('botTol', c.colorTol); set('botArea', c.colorMinArea);
   set('botRoi', Array.isArray(c.roi) ? c.roi.join(',') : '');
@@ -803,6 +831,24 @@ window.onBotUpdate = function (o) {
   if (!el || !o) return;
   el.textContent = o.text || '';
   el.style.color = o.color || '#aaa';
+};
+
+/* Java แจ้งผล auto-connect กลับมา */
+window.onBotAutoConnected = function (o) {
+  if (!o || !o.ok) return;
+  if ($('botHost')) $('botHost').value = o.host || '127.0.0.1';
+  if ($('botPort')) $('botPort').value = o.port || 16384;
+  if ($('botStat')) $('botStat').textContent =
+    'เชื่อมต่ออัตโนมัติแล้ว · ' + (o.host || '') + ':' + (o.port || '');
+  botStatusRefresh();
+};
+
+/* Java แจ้งผลนำเข้าต้นแบบจากไฟล์กลับมา */
+window.onBotFilesAdded = function (o) {
+  botRefreshStorage();
+  botStatusRefresh();
+  toast('นำเข้าต้นแบบ ' + (o ? (o.ok || 0) + '/' + (o.total || 0) : '')
+    + (o && o.release ? ' (ปล่อย)' : ' (กด)'));
 };
 
 setInterval(() => {

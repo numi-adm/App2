@@ -6,6 +6,8 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
@@ -52,6 +54,7 @@ public class MainActivity extends Activity {
 
     private static final int REQ_FILE_CHOOSER = 1001;
     private static final int REQ_SAVE_CSV = 1002;
+    private static final int REQ_BOT_TEMPLATE = 1003;
 
     private static final String JS_INSPECT_PAGE =
             "(function(){" +
@@ -123,6 +126,9 @@ public class MainActivity extends Activity {
     /* Auto-Hold Bot (พอร์ตจาก FFFFFF/bot.py) */
     private AutoHoldBot autoHoldBot;
     private BotStorage botStorage;
+    private volatile boolean pendingTemplateRelease = false;
+    private final java.util.concurrent.atomic.AtomicBoolean autoConnectStop =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
 
     private final Runnable liveInspectorRunnable = new Runnable() {
         @Override
@@ -183,7 +189,17 @@ public class MainActivity extends Activity {
                 }
             }
         });
-        dashWebView.setWebViewClient(new WebViewClient());
+        dashWebView.setWebViewClient(new WebViewClient() {
+            private boolean autoConnectTriggered = false;
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                if (!autoConnectTriggered) {
+                    autoConnectTriggered = true;
+                    autoConnectBot();
+                }
+            }
+        });
         dashWebView.addJavascriptInterface(new JsBridge(), "NativeApp");
         dashWebView.loadUrl("file:///android_asset/dashboard.html");
 
@@ -451,6 +467,8 @@ public class MainActivity extends Activity {
                     notifyDashboard("บันทึกไฟล์ไม่สำเร็จ: " + e.getMessage());
                 }
             }
+        } else if (requestCode == REQ_BOT_TEMPLATE) {
+            handleBotTemplateResult(resultCode, data);
         }
     }
 
@@ -917,6 +935,126 @@ public class MainActivity extends Activity {
         });
     }
 
+    // ------------------------------------------------------------------
+    // Auto-Hold Bot: เชื่อมต่อ ADB อัตโนมัติ / นำเข้าต้นแบบจากไฟล์
+    // ------------------------------------------------------------------
+
+    /** พยายามเชื่อมต่อ ADB อัตโนมัติตอนเปิดแอป (ไม่บล็อก UI thread) */
+    private void autoConnectBot() {
+        if (autoHoldBot == null) return;
+        new Thread(() -> {
+            String host = "127.0.0.1";
+            int port = 16384;
+            boolean enabled = true;
+            try {
+                JSONObject c = botStorage.loadConfig();
+                enabled = !c.has("autoConnect") || c.optBoolean("autoConnect", true);
+                host = c.optString("host", host);
+                port = c.optInt("port", port);
+            } catch (Exception ignored) {
+            }
+
+            if (!enabled) {
+                notifyBot("⏭ ข้าม ADB auto-connect (ปิดไว้ในตั้งค่า)", "#7f8c8d", true);
+                return;
+            }
+
+            java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
+            java.util.List<String[]> targets = new java.util.ArrayList<>();
+            addBotTarget(targets, seen, host, port);          // ค่าที่บันทึกไว้ก่อนเสมอ
+            addBotTarget(targets, seen, "127.0.0.1", 16384); // MuMu จอ 1 (รันแอปบนเครื่องเดียวกัน)
+            addBotTarget(targets, seen, "127.0.0.1", 16616); // MuMu จอ 2
+            addBotTarget(targets, seen, "10.0.2.2", 16384);  // emulator -> host
+            addBotTarget(targets, seen, "10.0.2.2", 16616);
+
+            for (int attempt = 1; attempt <= 12 && !autoConnectStop.get(); attempt++) {
+                if (autoHoldBot.isConnected()) break;
+                for (String[] t : targets) {
+                    if (autoConnectStop.get()) return;
+                    if (autoHoldBot.connect(t[0], Integer.parseInt(t[1]), 2500)) {
+                        final String h = t[0];
+                        final String p = t[1];
+                        runOnUiThread(() -> {
+                            try {
+                                JSONObject j = new JSONObject();
+                                j.put("ok", true).put("host", h).put("port", Integer.parseInt(p));
+                                dashWebView.evaluateJavascript(
+                                        "if(window.onBotAutoConnected) window.onBotAutoConnected("
+                                                + j.toString() + ");", null);
+                            } catch (Exception ignored) {
+                            }
+                        });
+                        notifyBot("🔌 เชื่อมต่อ ADB อัตโนมัติแล้ว: " + h + ":" + p, "#27ae60", true);
+                        return;
+                    }
+                }
+                try {
+                    Thread.sleep(3000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+            if (!autoHoldBot.isConnected()) {
+                notifyBot("⚠️ ADB auto-connect ไม่สำเร็จ — กด 🔌 เชื่อมต่อเองได้", "#e67e22", true);
+            }
+        }, "adb-autoconnect").start();
+    }
+
+    private static void addBotTarget(java.util.List<String[]> out,
+                                     java.util.Set<String> seen, String host, int port) {
+        if (host == null) return;
+        String h = host.trim();
+        if (h.isEmpty()) return;
+        String key = h + ":" + port;
+        if (seen.add(key)) out.add(new String[]{h, String.valueOf(port)});
+    }
+
+    /** ผลจาก file picker: เพิ่มทุกไฟล์ภาพที่เลือกเป็นต้นแบบกด/ปล่อย */
+    private void handleBotTemplateResult(int resultCode, Intent data) {
+        if (resultCode != Activity.RESULT_OK || data == null) return;
+        java.util.List<Uri> uris = new java.util.ArrayList<>();
+        ClipData clip = data.getClipData();
+        if (clip != null) {
+            for (int i = 0; i < clip.getItemCount(); i++) uris.add(clip.getItemAt(i).getUri());
+        } else if (data.getData() != null) {
+            uris.add(data.getData());
+        }
+        final boolean release = pendingTemplateRelease;
+        int ok = 0;
+        for (Uri u : uris) {
+            if (addTemplateFile(u, release)) ok++;
+        }
+        final int total = uris.size(), done = ok;
+        notifyBot("📂 นำเข้าต้นแบบ" + (release ? "ปล่อย" : "กด") + "จากไฟล์ "
+                + done + "/" + total + " ไฟล์", done > 0 ? "#27ae60" : "#c0392b", true);
+        runOnUiThread(() -> {
+            try {
+                JSONObject j = new JSONObject();
+                j.put("ok", done).put("total", total).put("release", release);
+                dashWebView.evaluateJavascript(
+                        "if(window.onBotFilesAdded) window.onBotFilesAdded(" + j.toString() + ");", null);
+            } catch (Exception ignored) {
+            }
+        });
+    }
+
+    private boolean addTemplateFile(Uri uri, boolean release) {
+        if (autoHoldBot == null) return false;
+        Bitmap bm = null;
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) return false;
+            bm = BitmapFactory.decodeStream(in);
+            if (bm == null) return false;
+            byte[] rgba = AutoHoldBot.bitmapToRgba(bm);
+            return autoHoldBot.addRawTemplate(rgba, bm.getWidth(), bm.getHeight(), release);
+        } catch (Exception ignored) {
+            return false;
+        } finally {
+            if (bm != null) bm.recycle();
+        }
+    }
+
     /** ส่งสถานะบอทไปยังหน้า dashboard.html */
     private void notifyBot(String text, String color, boolean force) {
         runOnUiThread(() -> {
@@ -934,6 +1072,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        autoConnectStop.set(true);
         if (autoHoldBot != null) autoHoldBot.stop();
         super.onDestroy();
     }
@@ -1184,6 +1323,31 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void botClearLog() {
             autoHoldBot.clearLog();
+        }
+
+        /** เปิด file picker เลือกไฟล์ต้นแบบ (กด/ปล่อย) ไม่ต้องแคปจอใหม่ */
+        @JavascriptInterface
+        public void botPickTemplate(boolean release) {
+            pendingTemplateRelease = release;
+            runOnUiThread(() -> {
+                try {
+                    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("image/*");
+                    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivityForResult(Intent.createChooser(intent, "เลือกไฟล์ต้นแบบ"),
+                            REQ_BOT_TEMPLATE);
+                } catch (Exception e) {
+                    notifyBot("❌ เปิดตัวเลือกไฟล์ไม่ได้: " + e.getMessage(), "#c0392b", true);
+                }
+            });
+        }
+
+        /** สั่งลองเชื่อมต่อ ADB อัตโนมัติอีกครั้ง (จากปุ่มใน UI) */
+        @JavascriptInterface
+        public void botAutoConnectNow() {
+            autoConnectBot();
         }
     }
 }

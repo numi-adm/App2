@@ -71,8 +71,12 @@ final class AutoHoldBot {
     // การเชื่อมต่อ
     // ------------------------------------------------------------------
     boolean connect(String host, int port) {
+        return connect(host, port, 8000);
+    }
+
+    boolean connect(String host, int port, int timeoutMs) {
         try {
-            AdbClient client = new AdbClient(host, port, 8000);
+            AdbClient client = new AdbClient(host, port, timeoutMs);
             client.connect();
             if (adb != null && adb != client) adb.close();
             adb = client;
@@ -157,6 +161,22 @@ final class AutoHoldBot {
     // ------------------------------------------------------------------
     // จัดการภาพต้นแบบ
     // ------------------------------------------------------------------
+    /** แปลง Bitmap เป็น RGBA byte[] (ใช้ทั้งตอนตัดจากจอและตอนนำเข้าไฟล์) */
+    static byte[] bitmapToRgba(Bitmap bm) {
+        int w = bm.getWidth(), h = bm.getHeight();
+        int[] px = new int[w * h];
+        bm.getPixels(px, 0, w, 0, 0, w, h);
+        byte[] rgba = new byte[w * h * 4];
+        for (int i = 0; i < px.length; i++) {
+            int c = px[i];
+            rgba[i * 4]     = (byte) ((c >> 16) & 0xFF);
+            rgba[i * 4 + 1] = (byte) ((c >> 8) & 0xFF);
+            rgba[i * 4 + 2] = (byte) (c & 0xFF);
+            rgba[i * 4 + 3] = (byte) ((c >> 24) & 0xFF);
+        }
+        return rgba;
+    }
+
     boolean addTemplate(String pngBase64, String boxJson, boolean release) {
         try {
             byte[] png = Base64.decode(pngBase64, Base64.DEFAULT);
@@ -199,16 +219,26 @@ final class AutoHoldBot {
                     rgba[drow + x * 4 + 3] = (byte) ((c >> 24) & 0xFF);     // A
                 }
             }
-            String savedName = storage.save(rgba, tw, th, release);
-            Tpl t = new Tpl(rgba, tw, th, new int[]{0, 0, tw, th}, savedName);
-            if (release) releaseTemplates.add(t);
-            else templates.add(t);
             bm.recycle();
-            return true;
+            return addRawTemplate(rgba, tw, th, release);
         } catch (Exception e) {
             Log.w(TAG, "addTemplate: " + e.getMessage());
             return false;
         }
+    }
+
+    /** เพิ่มต้นแบบจากไฟล์ภาพที่เลือก (ไม่ต้องแคปจอใหม่) */
+    boolean addRawTemplate(byte[] rgba, int w, int h, boolean release) {
+        if (rgba == null || w < 4 || h < 4 || (long) w * h > 8_000_000
+                || rgba.length < w * h * 4) return false;
+        String savedName = storage.save(rgba, w, h, release);
+        if (savedName == null) return false;
+        Tpl t = new Tpl(rgba, w, h, new int[]{0, 0, w, h}, savedName);
+        if (release) releaseTemplates.add(t);
+        else templates.add(t);
+        emit("📂 เพิ่มต้นแบบ" + (release ? "ปล่อย" : "กด") + "จากไฟล์ "
+                + w + "x" + h + " → " + savedName, "#27ae60", true);
+        return true;
     }
 
     void clearTemplates(boolean release) {
