@@ -117,7 +117,7 @@ final class AdbClient {
         while (System.currentTimeMillis() < deadline) {
             Packet p = read();
             if (p.cmd == A_WRTE) {
-                send(A_OKAY, LOCAL_ID, p.arg0);
+                send(A_OKAY, LOCAL_ID, p.arg0, new byte[0]);
                 continue;
             }
             if (p.cmd == A_CLSE) {
@@ -138,7 +138,7 @@ final class AdbClient {
                 if (bos.size() + p.data.length <= maxBytes) {
                     bos.write(p.data, 0, p.data.length);
                 }
-                send(A_OKAY, LOCAL_ID, p.arg0);   // arg0 ของฝ่ายตรงข้าม = remote id ของเรา
+                send(A_OKAY, LOCAL_ID, p.arg0, new byte[0]);   // arg0 ของฝ่ายตรงข้าม = remote id ของเรา
             } else if (p.cmd == A_CLSE) {
                 break;
             } else if (p.cmd == A_OKAY) {
