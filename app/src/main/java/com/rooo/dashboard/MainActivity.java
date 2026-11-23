@@ -962,10 +962,13 @@ public class MainActivity extends Activity {
             java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
             java.util.List<String[]> targets = new java.util.ArrayList<>();
             addBotTarget(targets, seen, host, port);          // ค่าที่บันทึกไว้ก่อนเสมอ
-            addBotTarget(targets, seen, "127.0.0.1", 16384); // MuMu จอ 1 (รันแอปบนเครื่องเดียวกัน)
-            addBotTarget(targets, seen, "127.0.0.1", 16616); // MuMu จอ 2
-            addBotTarget(targets, seen, "10.0.2.2", 16384);  // emulator -> host
-            addBotTarget(targets, seen, "10.0.2.2", 16616);
+            /* พอร์ต ADB ของ MuMu: 12 = 16384 + 32×ลำดับจอ (จอ 1=16384, จอ 2=16416, จอ 3=16448)
+             * 7555 = MuMu เวอร์ชันเก่า — ลองทั้งบน host ที่บันทึกไว้และบนเครื่องตัวเอง */
+            int[] mumuPorts = {16384, 16416, 16448, 7555};
+            for (int mp : mumuPorts) addBotTarget(targets, seen, host, mp);
+            if (!"127.0.0.1".equals(host) && !"localhost".equals(host)) {
+                for (int mp : mumuPorts) addBotTarget(targets, seen, "127.0.0.1", mp);
+            }
 
             for (int attempt = 1; attempt <= 12 && !autoConnectStop.get(); attempt++) {
                 if (autoHoldBot.isConnected()) break;

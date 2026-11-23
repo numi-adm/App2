@@ -111,11 +111,6 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
       <input id="botRoi" placeholder="ROI x1,y1,x2,y2 (เว้นว่าง = ทั้งจอ)" style="flex:2;min-width:180px">
       <input id="botHuman" type="number" value="70" title="ความเนียน 0–100" style="max-width:75px">
       <input id="botMaxHold" type="number" value="60" title="กดค้างนานสุด (วินาที)" style="max-width:75px">
-      <select id="botHold" style="max-width:130px">
-        <option value="auto">auto</option>
-        <option value="motionevent">motionevent</option>
-        <option value="swipe">swipe</option>
-      </select>
     </div>
     <div class="bot-grid">
       <button onclick="botCaptureUI()">📸 แคปจอ</button>
@@ -152,7 +147,7 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
       </div>
     </div>
     <pre id="botLogView" class="note mono" style="display:none;width:100%;max-height:180px;overflow:auto;background:#111;padding:8px;border-radius:8px;color:#aaa"></pre>
-    <span class="note" style="max-width:100%">ต่อตรงพอร์ต ADB ของ MuMu (ปกติ 16384, จอที่ 2 = 16616 …) → แคปจอ → ตัดภาพปุ่มที่ต้องกด (ลากกรอบแดง) → START. ระบบจะกดค้าง + แคปจอทุก 80–200ms → รอภาพชาร์จเต็ม/เป้าหมายหาย → หน่วง reaction แล้วปล่อย แบบเดียวกับบอทเดิม · ภาพปล่อยต้องตัดตอนชาร์จ 100% เท่านั้น</span>
+    <span class="note" style="max-width:100%">ต่อตรงพอร์ต ADB ของ MuMu (จอ 1 = 16384, จอ 2 = 16416, จอ 3 = 16448 — ถ้ารันแอปใน MuMu ให้ใส่ IP LAN ของเครื่อง PC เช่น 192.168.1.120) → แคปจอ → ตัดภาพปุ่มที่ต้องกด (ลากกรอบแดง) → START · ระบบกดค้างแบบ native (~20ms) + สแกนใน ROI ทุก 80–200ms → พอภาพชาร์จเต็มชัดจะปล่อยนิ้วทันที · ภาพปล่อยต้องตัดตอนชาร์จ 100% เท่านั้น</span>
   </div>
 </details>
 
@@ -582,7 +577,6 @@ function botCfg() {
     colorMinArea: Math.round(num('botArea', 30)),
     roi: roi,
     humanize: num('botHuman', 70) / 100,
-    holdMethod: $('botHold').value,
     maxHold: num('botMaxHold', 60),
     scanStep: 2,
     holdScanMin: 80, holdScanMax: 200,
@@ -684,7 +678,7 @@ async function botStatusRefresh() {
     const on = !!s.running;
     $('botStat').textContent = (on ? '● กำลังทำงาน' : '○ หยุดอยู่')
       + ' · ' + (s.target || '-')
-      + ' · เฟรม ' + (s.frames || 0)
+      + ' · กดแล้ว ' + (s.presses || 0) + ' ครั้ง'
       + ' · ต้นแบบ ' + (s.templates || 0) + '/' + (s.releaseTemplates || 0);
     const pill = $('botRunPill');
     if (pill) {
@@ -803,7 +797,7 @@ async function botLoadCfgUI() {
   set('botTol', c.colorTol); set('botArea', c.colorMinArea);
   set('botRoi', Array.isArray(c.roi) ? c.roi.join(',') : '');
   if (typeof c.humanize === 'number') set('botHuman', Math.round(c.humanize * 100));
-  set('botMaxHold', c.maxHold); set('botHold', c.holdMethod);
+  set('botMaxHold', c.maxHold);
   if (Object.keys(c).length) toast('โหลดตั้งค่าแล้ว');
 }
 

@@ -85,26 +85,6 @@ final class AdbClient {
         return readStream(maxBytes > 0 ? maxBytes : 40 * 1024 * 1024);
     }
 
-    /** เปิดบริการแบบค้างไว้ (ใช้กับ `input swipe ... 600000`) คืน client ตัวใหม่ที่อ่านต่อใน area */
-    synchronized AdbClient openLongRunning(String cmd) throws IOException {
-        AdbClient c = new AdbClient(host, port, 600000);
-        c.connect();
-        c.openService("exec:" + cmd);
-        c.startDrainer();
-        return c;
-    }
-
-    private void startDrainer() {
-        Thread t = new Thread(() -> {
-            try {
-                readStream(1024 * 1024);
-            } catch (Exception ignored) {
-            }
-        }, "adb-drainer");
-        t.setDaemon(true);
-        t.start();
-    }
-
     private void ensureOpen() throws IOException {
         if (socket == null || socket.isClosed() || closed.get()) {
             throw new IOException("ยังไม่ได้เชื่อมต่อ ADB หรือหลุดแล้ว");
@@ -183,7 +163,6 @@ final class AdbClient {
         return new Packet(cmd, arg0, arg1, data);
     }
 
-    /** ต้องไม่ synchronized — ไม่งั้นจะบล็อกตอนปิดขณะ drainer ค้างอ่านอยู่ */
     void close() {
         if (closed.getAndSet(true)) return;
         try {

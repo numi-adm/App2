@@ -16,8 +16,14 @@ import java.util.Random;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * AutoHoldBot — พอร์ตระบบ FFFFFF/bot.py มาเป็นฟีเจอร์ในแอป Android
+ * AutoHoldBot — พอร์ตระบบ FFFFFF/bot.py มาเป็นฟีเจอร์ในแอป Android (ปรับแต่งสำหรับ MuMu)
  * แคปจอผ่าน ADB → ตรวจจับด้วย C core (template/สี) → กดค้าง/ปล่อยแบบ humanize
+ *
+ * ปรับให้ฉลาดขึ้นสำหรับ MuMu 12 (SDK 32, `input motionevent` เป็น native เร็ว ~20ms):
+ * - ปล่อยนิ้วทันทีที่ชาร์จเต็ม (ไม่รอเธรด jitter หลับค้างแบบเดิมที่ดีเลย์ถึง ~1 วิ)
+ * - สแกนภาพชาร์จเต็มใน ROI เดียวกับฝั่งกด (เร็วขึ้นมากเมื่อตั้ง ROI)
+ * - ภาพปล่อยชัดมาก (score ≥ 0.97) = ยืนยันทันที ไม่ต้องรอ 2 เฟรม
+ * - ตัดโหมด swipe/pkill/early-release ที่ไม่จำเป็นสำหรับ MuMu ออกหมด
  */
 final class AutoHoldBot {
 
@@ -39,7 +45,7 @@ final class AutoHoldBot {
     private Thread drifter;
     private final AtomicBoolean drifterStop = new AtomicBoolean(false);
     private AdbClient adb;
-    private AdbClient swipeConn;
+    private volatile boolean holding = false;   // นิ้วกำลังกดค้างอยู่ (กัน MOVE แทรกหลัง UP)
     private JSONObject cfg = new JSONObject();
     private String host = "127.0.0.1";
     private int port = 16384;
@@ -48,6 +54,7 @@ final class AutoHoldBot {
     private int pressX = 0, pressY = 0;
     private int frames = 0;
     private int captures = 0;
+    private int presses = 0;      // จำนวนครั้งที่กดค้าง→ปล่อยสำเร็จในรอบนี้
     private String lastText = "พร้อมทำงาน";
     private long lastEmit = 0;
     private String lastEmitText = "";
@@ -121,6 +128,7 @@ final class AutoHoldBot {
         running.set(true);
         frames = 0;
         captures = 0;
+        presses = 0;
         emit("▶ เริ่มสแกนหาเป้าหมาย...", "#3498db", true);
         worker = new Thread(this::loop, "auto-hold-worker");
         worker.setDaemon(true);
@@ -150,6 +158,7 @@ final class AutoHoldBot {
             j.put("mode", holdMode);
             j.put("frames", frames);
             j.put("captures", captures);
+            j.put("presses", presses);
             j.put("templates", templates.size());
             j.put("releaseTemplates", releaseTemplates.size());
             j.put("last", lastText);
@@ -356,10 +365,8 @@ final class AutoHoldBot {
     // ------------------------------------------------------------------
     // ตรวจจับ
     // ------------------------------------------------------------------
-    private int[] findTarget(Frame frame) {
-        if (frame == null) return null;
-        int ox = 0, oy = 0;
-        Frame img = frame;
+    /** กรอบ ROI จาก config (null = ทั้งจอ) — ใช้ร่วมกันทั้งฝั่งกดและฝั่งปล่อย */
+    private int[] roiRect(Frame frame) {
         try {
             JSONArray roi = cfg.optJSONArray("roi");
             if (roi != null && roi.length() >= 4) {
@@ -367,13 +374,22 @@ final class AutoHoldBot {
                 int y1 = clamp(roi.getInt(1), 0, frame.h - 1);
                 int x2 = clamp(roi.getInt(2), x1 + 1, frame.w);
                 int y2 = clamp(roi.getInt(3), y1 + 1, frame.h);
-                if (x2 - x1 > 4 && y2 - y1 > 4) {
-                    img = crop(frame, x1, y1, x2 - x1, y2 - y1);
-                    ox = x1;
-                    oy = y1;
-                }
+                if (x2 - x1 > 4 && y2 - y1 > 4) return new int[]{x1, y1, x2, y2};
             }
         } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    private int[] findTarget(Frame frame) {
+        if (frame == null) return null;
+        int ox = 0, oy = 0;
+        Frame img = frame;
+        int[] r = roiRect(frame);
+        if (r != null) {
+            img = crop(frame, r[0], r[1], r[2] - r[0], r[3] - r[1]);
+            ox = r[0];
+            oy = r[1];
         }
 
         String mode = optString(cfg, "mode", "template");
@@ -413,18 +429,22 @@ final class AutoHoldBot {
         return bestRect;
     }
 
-    private boolean matchRelease(Frame frame) {
-        if (releaseTemplates.isEmpty()) return false;
-        double thr = optDouble(cfg, "releaseThreshold", 0.92);
+    /** คะแนนความเหมือนสูงสุดของต้นแบบปล่อย (0 = ไม่เจอ) — สแกนใน ROI เดียวกับฝั่งกด */
+    private double releaseScore(Frame frame) {
+        if (releaseTemplates.isEmpty() || frame == null) return 0.0;
+        Frame img = frame;
+        int[] r = roiRect(frame);
+        if (r != null) img = crop(frame, r[0], r[1], r[2] - r[0], r[3] - r[1]);
         int step = clamp(optInt(cfg, "scanStep", 2), 1, 4);
+        double best = 0.0;
         for (Tpl t : releaseTemplates) {
-            if (t.w > frame.w || t.h > frame.h) continue;
+            if (t.w > img.w || t.h > img.h) continue;
             int[] out = new int[4];
-            double score = NativeBridge.botMatchTemplate(frame.rgba, frame.w, frame.h,
+            double score = NativeBridge.botMatchTemplate(img.rgba, img.w, img.h,
                     t.rgba, t.w, t.h, step, out);
-            if (score >= thr) return true;
+            if (score > best) best = score;
         }
-        return false;
+        return best;
     }
 
     // ------------------------------------------------------------------
@@ -439,8 +459,6 @@ final class AutoHoldBot {
         int confirmN = clamp(optInt(cfg, "confirmN", 2), 1, 8);
         double maxHold = optDouble(cfg, "maxHold", 60.0);
         int interval = clamp(optInt(cfg, "interval", 300), 50, 3000);
-        double earlyPct = optDouble(cfg, "earlyPct", 0.0);
-        double earlyAfter = optDouble(cfg, "earlyAfter", 0.6);
         int fails = 0;
 
         try {
@@ -473,8 +491,6 @@ final class AutoHoldBot {
                 String reason = "stop";
                 long t0 = System.currentTimeMillis();
                 int miss = 0, confirm = 0;
-                double best = 0.0;
-                boolean earlyFired = false;
                 frames++;
 
                 while (running.get() && !stopFlag) {
@@ -495,10 +511,15 @@ final class AutoHoldBot {
                     }
                     miss = 0;
                     if (!releaseTemplates.isEmpty()) {
-                        boolean hit = matchRelease(check);
-                        if (hit) confirm++;
+                        double score = releaseScore(check);
+                        double thr = optDouble(cfg, "releaseThreshold", 0.92);
+                        if (score >= thr) confirm++;
                         else confirm = 0;
-                        emit("🔋 กำลังชาร์จ... (ยืนยัน " + confirm + "/" + confirmN + ")", "#2ecc71", false);
+                        /* ฉลาดขึ้น: ภาพชาร์จเต็มชัดมาก (≥0.97) = ยืนยันทันที
+                         * ไม่ต้องรอเฟรม 2 ให้เสียเวลาชาร์จเกิน */
+                        if (score >= 0.97) confirm = confirmN;
+                        emit("🔋 ชาร์จ " + String.format(java.util.Locale.US, "%.1f", elapsed)
+                                + " วิ (ยืนยัน " + confirm + "/" + confirmN + ")", "#2ecc71", false);
                     } else {
                         boolean gone = findTarget(check) == null;
                         if (gone) confirm++;
@@ -506,12 +527,6 @@ final class AutoHoldBot {
                     }
                     if (confirm >= confirmN) {
                         reason = "charged";
-                        break;
-                    }
-                    if (!earlyFired && earlyPct > 0 && maxHold > 0 &&
-                        elapsed >= maxHold * earlyAfter && rnd.nextDouble() < earlyPct * 0.06) {
-                        reason = "early";
-                        earlyFired = true;
                         break;
                     }
                 }
@@ -528,6 +543,7 @@ final class AutoHoldBot {
                 }
 
                 releaseTouch(x, y);
+                presses++;
                 if (!running.get() || stopFlag) break;
                 if ("lost".equals(reason)) {
                     reconnect();
@@ -570,21 +586,18 @@ final class AutoHoldBot {
     // ------------------------------------------------------------------
     // ทัช / ADB
     // ------------------------------------------------------------------
+    /* MuMu 12 (SDK 32): `input motionevent` เป็น native เร็ว ~20ms — ใช้ทางเดียว
+     * (ตัดโหมด swipe สำหรับ Android เก่า < 10 ที่ MuMu ไม่ต้องการออก) */
     private boolean pressTouch(int x, int y) {
         try {
             synchronized (holdLock) {
                 if (adb == null || !adb.isConnected()) throw new IOException("ADB หลุด");
                 pressX = x;
                 pressY = y;
-                String method = optString(cfg, "holdMethod", "auto");
-                if (!"swipe".equals(method) && (sdk >= 29 || "motionevent".equals(method))) {
-                    adb.shell("input motionevent DOWN " + x + " " + y);
-                    holdMode = "motion";
-                    startDrifter(x, y);
-                } else {
-                    swipeConn = adb.openLongRunning("input swipe " + x + " " + y + " " + x + " " + y + " 600000");
-                    holdMode = "swipe";
-                }
+                adb.shell("input motionevent DOWN " + x + " " + y);
+                holdMode = "motion";
+                holding = true;
+                startDrifter(x, y);
             }
             return true;
         } catch (Exception e) {
@@ -599,16 +612,17 @@ final class AutoHoldBot {
         if (h <= 0) return;
         final int r = (int) Math.round(4 * h);
         drifter = new Thread(() -> {
-            while (!drifterStop.get() && running.get()) {
+            while (!drifterStop.get() && holding && running.get()) {
                 long wait = 70 + rnd.nextInt(230);
                 if (rnd.nextDouble() < 0.18) wait *= 2 + rnd.nextInt(2);
                 sleep(wait);
-                if (drifterStop.get() || !running.get()) break;
+                if (drifterStop.get() || !holding || !running.get()) break;
                 int dx = r > 0 ? rnd.nextInt(2 * r + 1) - r : 0;
                 int dy = r > 0 ? rnd.nextInt(2 * r + 1) - r : 0;
                 try {
                     synchronized (holdLock) {
-                        if (adb != null && adb.isConnected()) {
+                        /* เช็ค holding ในล็อกอีกครั้ง — กัน MOVE แทรกหลัง UP ไปแล้ว */
+                        if (holding && adb != null && adb.isConnected()) {
                             adb.shell("input motionevent MOVE " + (x + dx) + " " + (y + dy));
                         }
                     }
@@ -620,30 +634,21 @@ final class AutoHoldBot {
         drifter.start();
     }
 
+    /** ปล่อยนิ้วทันที — ปลุกเธรด jitter ด้วย interrupt แล้วส่ง UP เลย
+     * (เดิม join(1200) รอเธรดหลับให้จบก่อน ทำให้ชาร์จเต็มแล้วยังกดต่ออีก ~1 วิ) */
     private void releaseTouch(int x, int y) {
         drifterStop.set(true);
-        if (drifter != null) {
-            try {
-                drifter.join(1200);
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-            }
-            drifter = null;
-        }
+        holding = false;
+        Thread d = drifter;
+        drifter = null;
+        if (d != null) d.interrupt();
         synchronized (holdLock) {
             try {
                 if ("motion".equals(holdMode) && adb != null && adb.isConnected()) {
                     adb.shell("input motionevent UP " + x + " " + y);
-                } else if ("swipe".equals(holdMode)) {
-                    if (swipeConn != null) swipeConn.close();
-                    if (adb != null && adb.isConnected()) {
-                        adb.shell("pkill -f 'input swipe'");
-                        adb.shell("input tap " + x + " " + y);
-                    }
                 }
             } catch (Exception ignored) {
             }
-            swipeConn = null;
             holdMode = "idle";
         }
     }
@@ -658,43 +663,21 @@ final class AutoHoldBot {
             int fmt = le32(raw, 8);
             if (w <= 0 || h <= 0 || (long) w * h > 40_000_000L) return null;
 
-            /* Android ใหม่เพิ่ม colorSpace 4 ไบต์ต่อท้าย header (รวม 16 ไบต์) */
-            int bpp;
-            if (fmt == 1 || fmt == 2 || fmt == 5) bpp = 4;       // RGBA / RGBX / BGRA
-            else if (fmt == 3) bpp = 3;                          // RGB_888
-            else if (fmt == 4) bpp = 2;                          // RGB_565
-            else return null;
-
-            int need = w * h * bpp;
+            /* MuMu ออก RGBA_8888/RGBX/BGRA (4 ไบต์/px) เสมอ — ไม่รองรับ 565/888 ที่ MuMu ไม่ใช้
+             * Android ใหม่เพิ่ม colorSpace 4 ไบต์ต่อท้าย header (รวม 16 ไบต์) */
+            if (fmt != 1 && fmt != 2 && fmt != 5) return null;
+            int need = w * h * 4;
             int off = (raw.length >= 16 + need) ? 16 : 12;
             if (raw.length < off + need) return null;
-            byte[] rgba = new byte[w * h * 4];
+            byte[] rgba = new byte[need];
             final int n = w * h;
-            if (bpp == 4) {
-                boolean bgra = (fmt == 5);
-                for (int i = 0; i < n; i++) {
-                    int s = off + i * 4, d = i * 4;
-                    rgba[d]     = raw[s + (bgra ? 2 : 0)];
-                    rgba[d + 1] = raw[s + 1];
-                    rgba[d + 2] = raw[s + (bgra ? 0 : 2)];
-                    rgba[d + 3] = (byte) 0xFF;
-                }
-            } else if (bpp == 3) {
-                for (int i = 0; i < n; i++) {
-                    int s = off + i * 3, d = i * 4;
-                    rgba[d] = raw[s];
-                    rgba[d + 1] = raw[s + 1];
-                    rgba[d + 2] = raw[s + 2];
-                    rgba[d + 3] = (byte) 0xFF;
-                }
-            } else {
-                for (int i = 0; i < n; i++) {
-                    int v = (raw[off + i * 2] & 0xFF) | ((raw[off + i * 2 + 1] & 0xFF) << 8);
-                    rgba[i * 4] = (byte) (((v >> 11) & 0x1F) * 255 / 31);
-                    rgba[i * 4 + 1] = (byte) (((v >> 5) & 0x3F) * 255 / 63);
-                    rgba[i * 4 + 2] = (byte) ((v & 0x1F) * 255 / 31);
-                    rgba[i * 4 + 3] = (byte) 0xFF;
-                }
+            boolean bgra = (fmt == 5);
+            for (int i = 0; i < n; i++) {
+                int s = off + i * 4, d = i * 4;
+                rgba[d]     = raw[s + (bgra ? 2 : 0)];
+                rgba[d + 1] = raw[s + 1];
+                rgba[d + 2] = raw[s + (bgra ? 0 : 2)];
+                rgba[d + 3] = (byte) 0xFF;
             }
             captures++;
             return new Frame(w, h, rgba);
