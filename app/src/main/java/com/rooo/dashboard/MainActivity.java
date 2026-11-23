@@ -120,6 +120,10 @@ public class MainActivity extends Activity {
     private final List<Integer> accountQueue = new ArrayList<>();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
+    /* Auto-Hold Bot (พอร์ตจาก FFFFFF/bot.py) */
+    private AutoHoldBot autoHoldBot;
+    private BotStorage botStorage;
+
     private final Runnable liveInspectorRunnable = new Runnable() {
         @Override
         public void run() {
@@ -141,6 +145,9 @@ public class MainActivity extends Activity {
             copyAssetToFile("accounts.json", dbFile);
         }
         NativeBridge.initDb(dbFile.getAbsolutePath());
+
+        botStorage = new BotStorage(this);
+        autoHoldBot = new AutoHoldBot((text, color, force) -> notifyBot(text, color, force), botStorage);
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.parseColor("#1e1e1e"));
@@ -910,6 +917,27 @@ public class MainActivity extends Activity {
         });
     }
 
+    /** ส่งสถานะบอทไปยังหน้า dashboard.html */
+    private void notifyBot(String text, String color, boolean force) {
+        runOnUiThread(() -> {
+            try {
+                JSONObject j = new JSONObject();
+                j.put("text", text == null ? "" : text);
+                j.put("color", color == null ? "#3498db" : color);
+                j.put("force", force);
+                dashWebView.evaluateJavascript(
+                        "if(window.onBotUpdate) window.onBotUpdate(" + j.toString() + ");", null);
+            } catch (Exception ignored) {
+            }
+        });
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (autoHoldBot != null) autoHoldBot.stop();
+        super.onDestroy();
+    }
+
     @Override
     public void onBackPressed() {
         if (browserContainer.getVisibility() == View.VISIBLE) {
@@ -1058,6 +1086,104 @@ public class MainActivity extends Activity {
             if (cb != null) {
                 cb.setPrimaryClip(ClipData.newPlainText("roblox", text));
             }
+        }
+
+        // ---------------- Auto-Hold Bot (FFFFFF) ----------------
+        @JavascriptInterface
+        public String botConnect(String host, int port) {
+            boolean ok = autoHoldBot.connect(host, port);
+            JSONObject j = new JSONObject();
+            try {
+                j.put("ok", ok);
+                j.put("status", autoHoldBot.statusJson());
+            } catch (Exception ignored) {
+            }
+            return j.toString();
+        }
+
+        @JavascriptInterface
+        public String botStatus() {
+            return autoHoldBot.statusJson();
+        }
+
+        @JavascriptInterface
+        public String botCapture() {
+            return autoHoldBot.captureJson();
+        }
+
+        @JavascriptInterface
+        public boolean botAddTemplate(String pngBase64, String boxJson, boolean release) {
+            return autoHoldBot.addTemplate(pngBase64, boxJson, release);
+        }
+
+        @JavascriptInterface
+        public void botClearTemplates(boolean release) {
+            autoHoldBot.clearTemplates(release);
+        }
+
+        @JavascriptInterface
+        public void botStart(String configJson) {
+            try {
+                autoHoldBot.start(new JSONObject(configJson));
+            } catch (Exception e) {
+                notifyBot("❌ ตั้งค่าบอทไม่ถูกต้อง: " + e.getMessage(), "#c0392b", true);
+            }
+        }
+
+        @JavascriptInterface
+        public void botStop() {
+            autoHoldBot.stop();
+        }
+
+        /* ---- โฟลเดอร์เก็บต้นแบบ / ตั้งค่า / log ---- */
+        @JavascriptInterface
+        public String botFolder() {
+            return autoHoldBot.folderPath();
+        }
+
+        @JavascriptInterface
+        public String botTemplateFolder() {
+            return autoHoldBot.templateFolderPath();
+        }
+
+        @JavascriptInterface
+        public String botSavedList() {
+            return autoHoldBot.savedListJson();
+        }
+
+        @JavascriptInterface
+        public boolean botLoadSaved(String name) {
+            return autoHoldBot.loadSaved(name);
+        }
+
+        @JavascriptInterface
+        public boolean botDeleteSaved(String name) {
+            return autoHoldBot.deleteSaved(name);
+        }
+
+        @JavascriptInterface
+        public int botDeleteAllSaved() {
+            return autoHoldBot.deleteAllSaved();
+        }
+
+        @JavascriptInterface
+        public String botLoadConfig() {
+            return autoHoldBot.loadConfigJson();
+        }
+
+        @JavascriptInterface
+        public boolean botSaveConfig(String json) {
+            return autoHoldBot.saveConfigJson(json);
+        }
+
+        @JavascriptInterface
+        public String botLog() {
+            return autoHoldBot.logTail();
+        }
+
+        @JavascriptInterface
+        public void botClearLog() {
+            autoHoldBot.clearLog();
         }
     }
 }

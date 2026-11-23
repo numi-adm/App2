@@ -31,6 +31,11 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
 .row-actions{display:flex;gap:6px;flex-wrap:wrap}
 .row-actions button{padding:6px 10px;font-size:12px}
 .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#2d7ff9;color:#fff;padding:8px 16px;border-radius:20px;font-size:13px;box-shadow:0 4px 14px rgba(0,0,0,.45);display:none;z-index:999}
+#botPreview{cursor:crosshair;touch-action:none}
+#botCrop{box-shadow:0 0 0 9999px rgba(0,0,0,.45);border:2px solid #ff3b3b!important}
+.bot-grid{width:100%;display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0}
+.bot-grid input,.bot-grid select{flex:1;min-width:80px}
+#botLog{width:100%;background:#111;padding:8px;border-radius:8px;min-height:36px;white-space:pre-wrap}
 @media (max-width:600px){
   .imp-group{width:100%;display:flex;gap:6px;flex-wrap:wrap}
   .imp-group input{flex:1;min-width:0}
@@ -48,6 +53,7 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
   <button class="check" onclick="checkCookie()">🍪 เช็ค cookie</button>
   <button class="sheet" onclick="$('csvFile').click()">📂 นำเข้า</button>
   <button class="sheet" onclick="exportSheetCsv()">📊 ส่งออก</button>
+  <button class="check" id="botToggle" onclick="botTogglePanel()">🤖 เปิดบอท</button>
   <span id="dlog" class="note" style="width:100%"></span>
 </div>
 
@@ -73,6 +79,77 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
     <button class="ghost" onclick="closeAll()">ปิดเบราว์เซอร์</button>
   </div>
   <span class="note" style="max-width:100%">เช็ค cookie = ถาม Roblox ว่า cookie เป็นของบัญชีไหน แล้วเทียบกับชื่อในชีต (เร็ว) · ตรวจรหัส = ล็อกอินด้วยรหัสจริง (ช้ากว่า)</span>
+</details>
+
+<details class="bar" id="botPanel" style="display:none">
+  <summary style="cursor:pointer;color:#bbb;font-size:13px">🤖 Auto-Hold Bot (พอร์ตจาก FFFFFF — ควบคุมจอ MuMu/ADB)</summary>
+  <div style="width:100%">
+    <div class="bot-grid">
+      <button id="botRunToggle" class="ghost" onclick="botToggleRun()">⏻ เปิด/ปิดบอท (OFF)</button>
+      <span id="botRunPill" class="badge UNKNOWN">OFF</span>
+      <button class="ghost" onclick="botRefreshStorage()">🔄 รีเฟรชโฟลเดอร์</button>
+    </div>
+    <div class="bot-grid">
+      <input id="botHost" value="127.0.0.1" placeholder="IP เครื่องที่รัน MuMu / adb">
+      <input id="botPort" type="number" value="16384" style="max-width:90px">
+      <button onclick="botConnectUI()">🔌 เชื่อมต่อ</button>
+      <span id="botStat" class="note" style="width:100%">ยังไม่เชื่อมต่อ</span>
+    </div>
+    <div class="bot-grid">
+      <select id="botMode" style="max-width:130px">
+        <option value="template">🖼 Template</option>
+        <option value="color">🎨 จับสี</option>
+      </select>
+      <input id="botThr" type="number" step="0.01" min="0.5" max="0.99" value="0.80" title="ความเหมือนขั้นต่ำ">
+      <input id="botColor" type="color" value="#ffffff" title="สีเป้าหมาย (โหมดจับสี)">
+      <input id="botTol" type="number" value="25" title="ความคลาดเคลื่อนของสี" style="max-width:70px">
+      <input id="botArea" type="number" value="30" title="พื้นที่สีขั้นต่ำ (px)" style="max-width:80px">
+    </div>
+    <div class="bot-grid">
+      <input id="botRoi" placeholder="ROI x1,y1,x2,y2 (เว้นว่าง = ทั้งจอ)" style="flex:2;min-width:180px">
+      <input id="botHuman" type="number" value="70" title="ความเนียน 0–100" style="max-width:75px">
+      <input id="botMaxHold" type="number" value="60" title="กดค้างนานสุด (วินาที)" style="max-width:75px">
+      <select id="botHold" style="max-width:130px">
+        <option value="auto">auto</option>
+        <option value="motionevent">motionevent</option>
+        <option value="swipe">swipe</option>
+      </select>
+    </div>
+    <div class="bot-grid">
+      <button onclick="botCaptureUI()">📸 แคปจอ</button>
+      <button class="ghost" onclick="botCropMode=!botCropMode;toast(botCropMode?'แตะ/ลากบนภาพเพื่อเลือกกรอบ':'ปิดโหมดตัดภาพ')">✂️ ตัดภาพ</button>
+      <button onclick="botAddTpl(false)">＋ ต้นแบบกด</button>
+      <button onclick="botAddTpl(true)">＋ ต้นแบบปล่อย</button>
+      <button class="ghost" onclick="botClear(false)">🗑 ล้างกด</button>
+      <button class="ghost" onclick="botClear(true)">🗑 ล้างปล่อย</button>
+    </div>
+    <div id="botPreviewWrap" style="position:relative;display:none;overflow:auto;max-height:420px;background:#111;border-radius:8px">
+      <img id="botPreview" alt="preview">
+      <div id="botCrop" style="position:absolute;display:none;pointer-events:none"></div>
+    </div>
+    <div class="bot-grid">
+      <button onclick="botStartUI()" style="background:#1d7a34">▶ START</button>
+      <button class="danger" onclick="botStopUI()">⏹ STOP</button>
+      <span id="botLog" class="note">ยังไม่เริ่มทำงาน</span>
+    </div>
+    <div class="bot-grid" style="border-top:1px solid #444;padding-top:8px">
+      <button class="sheet" onclick="botSaveCfgUI()">💾 บันทึกตั้งค่า</button>
+      <button class="ghost" onclick="botLoadCfgUI()">📂 โหลดตั้งค่า</button>
+      <button class="ghost" onclick="botShowLogUI()">📜 ดู log</button>
+      <button class="ghost" onclick="botClearLogUI()">🧹 ล้าง log</button>
+    </div>
+    <div style="width:100%;background:#202020;border:1px solid #3a3a3a;border-radius:8px;padding:8px;margin-top:4px">
+      <span class="note" style="margin:0;color:#8ecbff">📁 โฟลเดอร์จัดเก็บ (ต้นแบบ / ตั้งค่า / log)</span>
+      <span id="botFolder" class="note mono" style="width:100%;color:#bbb"></span>
+      <div id="botSavedList" style="width:100%;margin-top:6px"></div>
+      <div class="bot-grid" style="margin-bottom:0">
+        <button class="ghost" onclick="botRefreshStorage()">🔄 รีเฟรช</button>
+        <button class="danger" onclick="botDeleteAllSaved()">🗑 ลบต้นแบบทั้งหมด</button>
+      </div>
+    </div>
+    <pre id="botLogView" class="note mono" style="display:none;width:100%;max-height:180px;overflow:auto;background:#111;padding:8px;border-radius:8px;color:#aaa"></pre>
+    <span class="note" style="max-width:100%">ต่อตรงพอร์ต ADB ของ MuMu (ปกติ 16384, จอที่ 2 = 16616 …) → แคปจอ → ตัดภาพปุ่มที่ต้องกด (ลากกรอบแดง) → START. ระบบจะกดค้าง + แคปจอทุก 80–200ms → รอภาพชาร์จเต็ม/เป้าหมายหาย → หน่วง reaction แล้วปล่อย แบบเดียวกับบอทเดิม · ภาพปล่อยต้องตัดตอนชาร์จ 100% เท่านั้น</span>
+  </div>
 </details>
 
 <div class="note" style="margin-bottom:10px;background:#252525;padding:10px;border-radius:8px">
@@ -185,6 +262,58 @@ function nativeDispatch(path, data) {
     }
     if (path === '/api/close') {
       window.NativeApp.closeBrowser();
+      return {ok: true};
+    }
+    if (path === '/api/bot_connect') {
+      return JSON.parse(window.NativeApp.botConnect(data.host || '127.0.0.1', data.port || 16384) || '{"ok":false}');
+    }
+    if (path === '/api/bot_status') {
+      return JSON.parse(window.NativeApp.botStatus() || '{}');
+    }
+    if (path === '/api/bot_capture') {
+      return JSON.parse(window.NativeApp.botCapture() || '{"ok":false}');
+    }
+    if (path === '/api/bot_add_template') {
+      return {ok: !!window.NativeApp.botAddTemplate(data.image || '', data.box || '[0,0,0,0]', !!data.release)};
+    }
+    if (path === '/api/bot_clear_templates') {
+      window.NativeApp.botClearTemplates(!!data.release);
+      return {ok: true};
+    }
+    if (path === '/api/bot_start') {
+      window.NativeApp.botStart(JSON.stringify(data.config || {}));
+      return {ok: true};
+    }
+    if (path === '/api/bot_stop') {
+      window.NativeApp.botStop();
+      return {ok: true};
+    }
+    if (path === '/api/bot_folder') {
+      return {ok: true, path: window.NativeApp.botFolder() || '', templatePath: window.NativeApp.botTemplateFolder() || ''};
+    }
+    if (path === '/api/bot_saved_list') {
+      return {ok: true, items: JSON.parse(window.NativeApp.botSavedList() || '[]')};
+    }
+    if (path === '/api/bot_load_saved') {
+      return {ok: !!window.NativeApp.botLoadSaved(data.name || '')};
+    }
+    if (path === '/api/bot_delete_saved') {
+      return {ok: !!window.NativeApp.botDeleteSaved(data.name || '')};
+    }
+    if (path === '/api/bot_delete_all_saved') {
+      return {ok: true, deleted: window.NativeApp.botDeleteAllSaved()};
+    }
+    if (path === '/api/bot_load_config') {
+      return {ok: true, config: JSON.parse(window.NativeApp.botLoadConfig() || '{}')};
+    }
+    if (path === '/api/bot_save_config') {
+      return {ok: !!window.NativeApp.botSaveConfig(JSON.stringify(data.config || {}))};
+    }
+    if (path === '/api/bot_log') {
+      return {ok: true, text: window.NativeApp.botLog() || ''};
+    }
+    if (path === '/api/bot_clear_log') {
+      window.NativeApp.botClearLog();
       return {ok: true};
     }
   } catch (e) {
@@ -417,6 +546,316 @@ window.onNativeCookieUpdate = function(msg) {
   }
   load();
 };
+
+/* ================= Auto-Hold Bot (พอร์ตจาก FFFFFF) ================= */
+let botCropMode = false;
+let botCropSel = null;
+
+function botCfg() {
+  const roiRaw = ($('botRoi').value || '').trim();
+  let roi = null;
+  if (roiRaw) {
+    const p = roiRaw.split(',').map(Number);
+    if (p.length === 4 && p.every(Number.isFinite)) roi = p;
+  }
+  const num = (id, def) => { const v = parseFloat($(id).value); return Number.isFinite(v) ? v : def; };
+  return {
+    host: ($('botHost').value || '').trim() || '127.0.0.1',
+    port: Math.round(num('botPort', 16384)),
+    mode: $('botMode').value,
+    tmThreshold: num('botThr', 0.8),
+    colorHex: $('botColor').value || '#ffffff',
+    colorTol: Math.round(num('botTol', 25)),
+    colorMinArea: Math.round(num('botArea', 30)),
+    roi: roi,
+    humanize: num('botHuman', 70) / 100,
+    holdMethod: $('botHold').value,
+    maxHold: num('botMaxHold', 60),
+    scanStep: 2,
+    holdScanMin: 80, holdScanMax: 200,
+    reactMin: 120, reactMax: 350,
+    slowChance: 0.15, confirmN: 2,
+    interval: 300, releaseThreshold: 0.92
+  };
+}
+
+async function botConnectUI() {
+  $('botStat').textContent = 'กำลังเชื่อมต่อ...';
+  try {
+    const j = await api('/api/bot_connect', {
+      host: ($('botHost').value || '').trim() || '127.0.0.1',
+      port: Math.round(parseFloat($('botPort').value) || 16384)
+    });
+    $('botStat').textContent = j.ok
+      ? ('เชื่อมต่อแล้ว · ' + ((j.status && j.status.target) || ''))
+      : 'เชื่อมต่อไม่สำเร็จ (ดู-status)';
+    if (j.status && j.status.last) $('botLog').textContent = j.status.last;
+  } catch (e) {
+    $('botStat').textContent = 'เชื่อมต่อไม่สำเร็จ: ' + e;
+  }
+}
+
+async function botCaptureUI() {
+  $('botLog').textContent = 'กำลังแคปจอ...';
+  try {
+    const j = await api('/api/bot_capture', {});
+    if (!j.ok) { $('botLog').textContent = j.error || 'แคปหน้าจอไม่ได้'; return; }
+    window._botLastImage = j.image;
+    const img = $('botPreview');
+    img.src = j.image;
+    $('botPreviewWrap').style.display = 'block';
+    botCropSel = null;
+    $('botCrop').style.display = 'none';
+    $('botLog').textContent = 'แคปจอ ' + j.w + 'x' + j.h + ' — ลากบนภาพเพื่อตัดต้นแบบ (หรือกดเพิ่มเพื่อใช้ทั้งภาพ)';
+  } catch (e) {
+    $('botLog').textContent = 'แคปหน้าจอไม่ได้: ' + e;
+  }
+}
+
+async function botAddTpl(release) {
+  if (!window._botLastImage) return alert('กด 📸 แคปจอก่อนครับ');
+  const img = $('botPreview');
+  let box = [0, 0, img.naturalWidth || 1, img.naturalHeight || 1];
+  if (botCropSel && img.clientWidth > 0 && img.clientHeight > 0) {
+    const sx = img.naturalWidth / img.clientWidth;
+    const sy = img.naturalHeight / img.clientHeight;
+    box = [Math.round(botCropSel.x1 * sx), Math.round(botCropSel.y1 * sy),
+           Math.round(botCropSel.x2 * sx), Math.round(botCropSel.y2 * sy)];
+    if (box[2] <= box[0]) box[2] = box[0] + 1;
+    if (box[3] <= box[1]) box[3] = box[1] + 1;
+  }
+  const b64 = (window._botLastImage.split(',')[1]) || '';
+  const j = await api('/api/bot_add_template', {image: b64, box: JSON.stringify(box), release: !!release});
+  toast(j.ok ? ((release ? 'ต้นแบบปล่อย' : 'ต้นแบบกด') + ' เพิ่มแล้ว → บันทึกในโฟลเดอร์แล้ว')
+              : 'เพิ่มต้นแบบไม่สำเร็จ');
+  botStatusRefresh();
+  botRefreshStorage();
+}
+
+async function botClear(release) {
+  await api('/api/bot_clear_templates', {release: !!release});
+  toast('ล้างต้นแบบออกจากหน่วยความจำแล้ว (ไฟล์ในโฟลเดอร์ยังอยู่ — ลบได้ในตารางด้านล่าง)');
+  botStatusRefresh();
+}
+
+async function botStartUI() {
+  await api('/api/bot_start', {config: botCfg()});
+  $('botLog').textContent = '▶ กำลังเริ่มบอท...';
+  botStatusRefresh();
+}
+
+async function botStopUI() {
+  await api('/api/bot_stop', {});
+  $('botLog').textContent = '⏹ หยุดการทำงานแล้ว';
+  botStatusRefresh();
+}
+
+async function botStatusRefresh() {
+  try {
+    const s = await api('/api/bot_status', {});
+    if (!$('botStat')) return;
+    const on = !!s.running;
+    $('botStat').textContent = (on ? '● กำลังทำงาน' : '○ หยุดอยู่')
+      + ' · ' + (s.target || '-')
+      + ' · เฟรม ' + (s.frames || 0)
+      + ' · ต้นแบบ ' + (s.templates || 0) + '/' + (s.releaseTemplates || 0);
+    const pill = $('botRunPill');
+    if (pill) {
+      pill.textContent = on ? 'ON' : 'OFF';
+      pill.className = 'badge ' + (on ? 'WORK' : 'UNKNOWN');
+    }
+    const t = $('botRunToggle');
+    if (t) t.textContent = '⏻ ปิดบอท (ON) / เปิดบอท (OFF) — ' + (on ? 'ON' : 'OFF');
+  } catch (e) {}
+}
+
+/* ---------- เปิด/ปิดแผง ---------- */
+function botTogglePanel() {
+  const p = $('botPanel');
+  if (!p) return;
+  const show = (p.style.display === 'none');
+  p.style.display = show ? '' : 'none';
+  if (show) {
+    p.open = true;
+    botRefreshStorage();
+    botStatusRefresh();
+  }
+  const b = $('botToggle');
+  if (b) b.textContent = show ? '🤖 ปิดบอท' : '🤖 เปิดบอท';
+}
+
+/* ---------- เปิด/ปิดการทำงาน (toggle เดียวแทน START/STOP) ---------- */
+async function botToggleRun() {
+  try {
+    const s = await api('/api/bot_status', {});
+    if (s.running) {
+      await api('/api/bot_stop', {});
+      $('botLog').textContent = '⏹ ปิดบอทแล้ว';
+    } else {
+      await api('/api/bot_start', {config: botCfg()});
+      $('botLog').textContent = '▶ เปิดบอทแล้ว';
+    }
+  } catch (e) {
+    $('botLog').textContent = '❌ ' + e;
+  }
+  botStatusRefresh();
+}
+
+/* ---------- โฟลเดอร์จัดเก็บ ---------- */
+async function botRefreshStorage() {
+  try {
+    const f = await api('/api/bot_folder', {});
+    if ($('botFolder')) $('botFolder').textContent = (f.path || '') + '\n' + (f.templatePath || '');
+    const r = await api('/api/bot_saved_list', {});
+    botRenderSaved(r.items || []);
+  } catch (e) {
+    if ($('botFolder')) $('botFolder').textContent = 'อ่านโฟลเดอร์ไม่ได้: ' + e;
+  }
+}
+
+function botRenderSaved(items) {
+  const el = $('botSavedList');
+  if (!el) return;
+  if (!items.length) {
+    el.innerHTML = '<span class="note">ยังไม่มีต้นแบบในโฟลเดอร์ — แคปจอแล้วตัดต้นแบบใหม่ได้เลย</span>';
+    return;
+  }
+  let html = '<div style="width:100%;font-size:12px">';
+  items.forEach((it, i) => {
+    const label = it.release ? '🟢 ปล่อย' : '🔴 กด';
+    const nm = String(it.name || '').replace(/[^\w.-]/g, '_');
+    html += '<div class="bot-grid" style="margin:3px 0">'
+      + '<span style="flex:1;min-width:120px;word-break:break-all">' + label + ' <b>' + esc(nm) + '</b>'
+      + '<span class="note">' + (it.w || '?') + 'x' + (it.h || '?') + ' · ' + esc(it.created || '') + '</span></span>'
+      + '<button class="ghost" onclick="botLoadSavedUI(\'' + nm + '\')">โหลด</button>'
+      + '<button class="danger" onclick="botDeleteSavedUI(\'' + nm + '\')">ลบ</button>'
+      + '</div>';
+  });
+  el.innerHTML = html + '</div>';
+}
+
+async function botLoadSavedUI(name) {
+  const j = await api('/api/bot_load_saved', {name: name});
+  toast(j.ok ? 'โหลดต้นแบบแล้ว' : 'โหลดไม่สำเร็จ');
+  botStatusRefresh();
+}
+
+async function botDeleteSavedUI(name) {
+  const j = await api('/api/bot_delete_saved', {name: name});
+  toast(j.ok ? 'ลบต้นแบบแล้ว' : 'ลบไม่สำเร็จ');
+  botRefreshStorage();
+  botStatusRefresh();
+}
+
+async function botDeleteAllSaved() {
+  if (!window._botDelAllArmed) {
+    window._botDelAllArmed = true;
+    toast('กดอีกครั้งภายใน 4 วินาทีเพื่อลบต้นแบบทั้งหมดจริง');
+    setTimeout(() => { window._botDelAllArmed = false; }, 4000);
+    return;
+  }
+  window._botDelAllArmed = false;
+  const j = await api('/api/bot_delete_all_saved', {});
+  toast('ลบไป ' + (j.deleted || 0) + ' ไฟล์');
+  botRefreshStorage();
+  botStatusRefresh();
+}
+
+async function botSaveCfgUI() {
+  const j = await api('/api/bot_save_config', {config: botCfg()});
+  toast(j.ok ? 'บันทึกตั้งค่าแล้ว' : 'บันทึกตั้งค่าไม่สำเร็จ');
+}
+
+async function botLoadCfgUI() {
+  const j = await api('/api/bot_load_config', {});
+  const c = j.config || {};
+  const set = (id, v) => { if (v !== undefined && v !== null && $(id)) $(id).value = v; };
+  set('botHost', c.host); set('botPort', c.port); set('botMode', c.mode);
+  set('botThr', c.tmThreshold); set('botColor', c.colorHex);
+  set('botTol', c.colorTol); set('botArea', c.colorMinArea);
+  set('botRoi', Array.isArray(c.roi) ? c.roi.join(',') : '');
+  if (typeof c.humanize === 'number') set('botHuman', Math.round(c.humanize * 100));
+  set('botMaxHold', c.maxHold); set('botHold', c.holdMethod);
+  if (Object.keys(c).length) toast('โหลดตั้งค่าแล้ว');
+}
+
+async function botShowLogUI() {
+  const el = $('botLogView');
+  if (!el) return;
+  const show = (el.style.display === 'none');
+  el.style.display = show ? 'block' : 'none';
+  if (show) {
+    const j = await api('/api/bot_log', {});
+    el.textContent = j.text || '(ยังไม่มี log)';
+    el.scrollTop = el.scrollHeight;
+  }
+}
+
+async function botClearLogUI() {
+  await api('/api/bot_clear_log', {});
+  const el = $('botLogView');
+  if (el) el.textContent = '(ล้าง log แล้ว)';
+  toast('ล้าง log แล้ว');
+}
+
+window.onBotUpdate = function (o) {
+  const el = $('botLog');
+  if (!el || !o) return;
+  el.textContent = o.text || '';
+  el.style.color = o.color || '#aaa';
+};
+
+setInterval(() => {
+  const p = $('botPanel');
+  if (p && p.open && p.style.display !== 'none') botStatusRefresh();
+}, 2500);
+
+/* โหลดโฟลเดอร์/ตั้งค่าที่บันทึกไว้ตอนเปิดแอป (ไม่เด้งแผงขึ้นมาเอง) */
+setTimeout(() => {
+  if (!isNative) return;
+  botRefreshStorage();
+  botLoadCfgUI();
+}, 400);
+
+(function () {
+  const img = $('botPreview');
+  const box = $('botCrop');
+  if (!img || !box) return;
+  let start = null;
+  const rel = e => {
+    const r = img.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(r.width, e.clientX - r.left)),
+      y: Math.max(0, Math.min(r.height, e.clientY - r.top))
+    };
+  };
+  const draw = () => {
+    if (!botCropSel) return;
+    box.style.left = botCropSel.x1 + 'px';
+    box.style.top = botCropSel.y1 + 'px';
+    box.style.width = (botCropSel.x2 - botCropSel.x1) + 'px';
+    box.style.height = (botCropSel.y2 - botCropSel.y1) + 'px';
+  };
+  img.addEventListener('pointerdown', e => {
+    if (!botCropMode) return;
+    e.preventDefault();
+    start = rel(e);
+    botCropSel = {x1: start.x, y1: start.y, x2: start.x, y2: start.y};
+    box.style.display = 'block';
+    draw();
+  });
+  img.addEventListener('pointermove', e => {
+    if (!botCropMode || !start) return;
+    const p = rel(e);
+    botCropSel = {
+      x1: Math.min(start.x, p.x), y1: Math.min(start.y, p.y),
+      x2: Math.max(start.x, p.x), y2: Math.max(start.y, p.y)
+    };
+    draw();
+  });
+  img.addEventListener('pointerup', () => { start = null; });
+  img.addEventListener('pointercancel', () => { start = null; });
+})();
 
 load();
 </script>

@@ -2,6 +2,30 @@
 
 โปรเจกต์แอปบนโทรศัพท์ (Android NDK ภาษา C + WebView ในตัว) แยกโฟลเดอร์อิสระตามที่ต้องการ
 
+## 🤖 Auto-Hold Bot (รวมระบบจาก `C:\Users\msi\Desktop\FFFFFF`)
+พอร์ตระบบบอทกดค้างจาก `FFFFFF/bot.py` มาเป็นฟีเจอร์ในแอปโดยตรง (ไม่ต้องรัน Python บน PC):
+
+- **ตรวจจับภาษา C** (`bot_core.c`): template matching แบบ NCC (`TM_CCOEFF_NORMED`) และจับกลุ่มสี (`connectedComponents`) — เร็วพอแสกนทุก 80–200 ms บนมือถือ
+- **ADB client ภาษา Java** (`AdbClient.java`): จับมือ ADB wire protocol (CNXN/OPEN/WRTE) ต่อตรงพอร์ต ADB ของ MuMu/อุปกรณ์ เช่น `127.0.0.1:16384` — ไม่ต้องพึ่ง `adb.exe`, ไม่ต้อง root
+- **Bot engine** (`AutoHoldBot.java`): แคปจอ → หาเป้าหมาย → กดค้าง (motionevent/swipe) → สั่น/เด้งนิ้วแบบ humanize → รอภาพชาร์จเต็ม (ยืนยัน 2 เฟรม) → หน่วง reaction → ปล่อย → รอเป้าหมายหายก่อนสแกนใหม่ (กันกดซ้ำ) พร้อม reconnect อัตโนมัติ
+- **UI ในแอป**: กดปุ่ม `🤖 เปิดบอท` บนแถบด้านบนเพื่อเปิด/ปิดแผง → ใส่ IP/พอร์ต → แคปจอ → ลากกรอบตัด "ต้นแบบกด" และ "ต้นแบบปล่อย" → `⏻ เปิด/ปิดบอท` หรือ START/STOP พร้อม status สด
+- **ปุ่มเปิด/ปิด**: `🤖 เปิดบอท/ปิดบอท` บนแถบ = เปิด/ปิดแผงควบคุม · `⏻ เปิด/ปิดบอท` ในแผง = สั่งรัน/หยุดบอท (มีป้ายสถานะ ON/OFF)
+- **โฟลเดอร์จัดเก็บ** (`BotStorage.java`): ทุกต้นแบบที่ตัดจะถูกบันทึกอัตโนมัติเป็น `.png` + `.json` ใน `<filesDir>/AutoHoldBot/templates/` พร้อม `config.json` (ตั้งค่า) และ `bot.log` (ประวัติสถานะ) — เปิดแอปใหม่ต้นแบบยังอยู่ กด `โหลด` ในตารางเพื่อใช้ซ้ำ, `ลบ`/`ลบทั้งหมด` เพื่อจัดการไฟล์
+
+### วิธีใช้
+1. เปิด MuMu ให้เข้า Android แล้วเปิด USB/ADB debugging ( MuMu ปกติเปิดพอร์ต 16384 อยู่แล้ว )
+2. ในแอปใส่ **IP ของเครื่องที่รัน MuMu** (ถ้าใช้บนเครื่องเดียวกันกับ emulator ผ่าน WiFi ให้ใส่ IP LAN เช่น `192.168.1.5`) และ **พอร์ต ADB** (`16384` = จอที่ 1, `16616` = จอที่ 2 ...)
+3. กด **🔌 เชื่อมต่อ** → กด **📸 แคปจอ** → เปิด **✂️ ตัดภาพ** แล้วลากกรอบบนปุ่มที่ต้องการ → กด **＋ ต้นแบบกด**
+4. (แนะนำ) แคปจอตอน **ชาร์จเต็ม 100%** แล้วตัดเป็น **＋ ต้นแบบปล่อย** — ถ้าไม่ใส่ ระบบจะปล่อยเมื่อเป้าหมายหายจากจอแทน
+5. ปรับความเหมือน/ROI/ความเนียน/กดนานสุด แล้วกด **⏻ เปิดบอท** (หรือ ▶ START), กดอีกครั้ง (หรือ ⏹ STOP) เพื่อหยุด
+6. กด **💾 บันทึกตั้งค่า** เพื่อเก็บค่าลง `config.json` (โหลดกลับอัตโนมัติตอนเปิดแอป) · กด **📜 ดู log** เพื่อดูประวัติจาก `bot.log`
+
+> **ข้อจำกัดของการพอร์ต**
+> - โหมด OCR จากบอทเดิมไม่ได้พอร์ต (ต้องพึ่ง Tesseract) — ใช้โหมด Template หรือจับสีแทนได้เลย
+> - รันได้ **1 เป้าหมายต่อ 1 ครั้ง** (ต่างจากบอทเดิมที่รันหลายจอพร้อมกันได้) — ต้องการหลายจอให้สลับพอร์ตทีละจอ
+> - ควรใส่ **ROI** ให้แคบที่สุดเท่าที่จะได้ เพื่อให้สแกนเร็วขึ้นมาก
+> - ต้นแบบ/ตั้งค่า/log เก็บใน internal storage ของแอป (`Android/data/com.rooo.dashboard/files/AutoHoldBot`) — ถ้าถอน installation ข้อมูลหายด้วย · ปุ่ม `ล้างกด/ล้างปล่อย` ลบเฉพาะใน memory (ไฟล์ยังอยู่) ต้องใช้ปุ่ม `ลบ` ในตารางจัดเก็บเพื่อลบไฟล์จริง
+
 ## สิ่งที่ปรับปรุงและตัดออกตามคำสั่ง
 1. **ตัดส่วน "สมัครไอดีใหม่"** ออกทั้งหมด (ทั้งฟอร์มและโค้ดสมัคร)
 2. **ตัดตัวเลือก "เก็บอัตโนมัติ"** ออก
@@ -54,6 +78,10 @@
   - แยกข้อความนำเข้า (`ชื่อ:รหัส` หรือ `.ROBLOSECURITY` cookie)
   - สกัดค่า `.ROBLOSECURITY` จาก Cookie Header ของเบราว์เซอร์ในแอป
   - สร้างสคริปต์ Auto-Fill กรอก `username` และ `password` อัตโนมัติเมื่อเปิดหน้าล็อกอิน Roblox
+- `app/src/main/cpp/bot_core.h` & `bot_core.c` — C core ของ Auto-Hold Bot (NCC template match + connected-component color detect)
+- `app/src/main/java/com/rooo/dashboard/AdbClient.java` — ADB wire protocol client (ต่อตรงพอร์ต MuMu/ADB)
+- `app/src/main/java/com/rooo/dashboard/AutoHoldBot.java` — เอนจินกดค้าง/ปล่อยแบบ humanize (พอร์ตจาก `bot.py`)
+- `app/src/main/java/com/rooo/dashboard/BotStorage.java` — โฟลเดอร์จัดเก็บต้นแบบ (`templates/*.png` + `*.json`), `config.json`, `bot.log`
 - `app/src/main/cpp/CMakeLists.txt` — ไฟล์ CMake สำหรับคอมไพล์ C เป็นไลบรารี `libroblox_dash.so` บน Android NDK
 - `app/src/main/java/com/rooo/dashboard/MainActivity.java` & `NativeBridge.java` — หน้าต่างหลักของแอป Android พร้อม WebView แดชบอร์ด และหน้าต่าง Roblox Browser ในตัว (มีปุ่ม **ดึง Cookie**, **ย่อหน้าต่าง**, **ปิด**)
 - `app/src/main/assets/dashboard.html` — หน้า UI สำหรับมือถือที่เชื่อมกับ C Core ผ่าน `window.NativeApp`

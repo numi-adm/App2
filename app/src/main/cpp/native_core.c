@@ -1,4 +1,5 @@
 #include "native_core.h"
+#include "bot_core.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1329,6 +1330,68 @@ Java_com_rooo_dashboard_NativeBridge_classifyPage(JNIEnv *env, jclass clazz,
     jstring res = (*env)->NewStringUTF(env, json);
     free(json);
     return res;
+}
+
+/* ---------- Auto-Hold Bot (พอร์ตจาก FFFFFF/bot.py) ---------- */
+
+JNIEXPORT jdouble JNICALL
+Java_com_rooo_dashboard_NativeBridge_botMatchTemplate(JNIEnv *env, jclass clazz,
+        jbyteArray jimg, jint w, jint h,
+        jbyteArray jtpl, jint tw, jint th,
+        jint step, jintArray joutRect) {
+    (void)clazz;
+    if (!jimg || !jtpl || !joutRect) return 0.0;
+    jsize ilen = (*env)->GetArrayLength(env, jimg);
+    jsize tlen = (*env)->GetArrayLength(env, jtpl);
+    if (ilen < (jsize)w * h * 4 || tlen < (jsize)tw * th * 4) return 0.0;
+
+    jbyte *img = (*env)->GetByteArrayElements(env, jimg, NULL);
+    jbyte *tpl = (*env)->GetByteArrayElements(env, jtpl, NULL);
+    jint *rect = (*env)->GetIntArrayElements(env, joutRect, NULL);
+    if (!img || !tpl || !rect) {
+        if (img) (*env)->ReleaseByteArrayElements(env, jimg, img, JNI_ABORT);
+        if (tpl) (*env)->ReleaseByteArrayElements(env, jtpl, tpl, JNI_ABORT);
+        if (rect) (*env)->ReleaseIntArrayElements(env, joutRect, rect, JNI_ABORT);
+        return 0.0;
+    }
+
+    BotRect r = {0, 0, 0, 0};
+    double score = bot_match_template((const unsigned char *)img, (int)w, (int)h,
+                                      (const unsigned char *)tpl, (int)tw, (int)th,
+                                      (int)step, &r);
+    rect[0] = r.x1; rect[1] = r.y1; rect[2] = r.x2; rect[3] = r.y2;
+
+    (*env)->ReleaseByteArrayElements(env, jimg, img, JNI_ABORT);
+    (*env)->ReleaseByteArrayElements(env, jtpl, tpl, JNI_ABORT);
+    (*env)->ReleaseIntArrayElements(env, joutRect, rect, 0);
+    return (jdouble)score;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_rooo_dashboard_NativeBridge_botFindColor(JNIEnv *env, jclass clazz,
+        jbyteArray jimg, jint w, jint h,
+        jint rgb, jint tol, jint min_area, jintArray joutPt) {
+    (void)clazz;
+    if (!jimg || !joutPt) return 0;
+    jsize ilen = (*env)->GetArrayLength(env, jimg);
+    if (ilen < (jsize)w * h * 4) return 0;
+
+    jbyte *img = (*env)->GetByteArrayElements(env, jimg, NULL);
+    jint *pt = (*env)->GetIntArrayElements(env, joutPt, NULL);
+    if (!img || !pt) {
+        if (img) (*env)->ReleaseByteArrayElements(env, jimg, img, JNI_ABORT);
+        if (pt) (*env)->ReleaseIntArrayElements(env, joutPt, pt, JNI_ABORT);
+        return 0;
+    }
+
+    int x = 0, y = 0;
+    int area = bot_find_color((const unsigned char *)img, (int)w, (int)h,
+                              (unsigned int)rgb, (int)tol, (int)min_area, &x, &y);
+    pt[0] = x; pt[1] = y;
+
+    (*env)->ReleaseByteArrayElements(env, jimg, img, JNI_ABORT);
+    (*env)->ReleaseIntArrayElements(env, joutPt, pt, 0);
+    return (jint)area;
 }
 
 #endif /* __ANDROID__ */

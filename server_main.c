@@ -144,6 +144,26 @@ static void handle_client(SOCKET client) {
             free(req);
             return;
         }
+        if (strncmp(path, "/api/bot_", 9) == 0) {
+            if (strcmp(path, "/api/bot_status") == 0) {
+                send_json(client, "{\"ok\":false,\"running\":false,\"connected\":false,"
+                                  "\"target\":\"android-app\",\"templates\":0,"
+                                  "\"releaseTemplates\":0,\"frames\":0,"
+                                  "\"last\":\"Auto-Hold Bot รันในแอป Android (NativeApp) เท่านั้น\"}");
+            } else if (strcmp(path, "/api/bot_saved_list") == 0) {
+                send_json(client, "{\"ok\":true,\"items\":[]}");
+            } else if (strcmp(path, "/api/bot_folder") == 0) {
+                send_json(client, "{\"ok\":false,\"path\":\"\",\"templatePath\":\"\"}");
+            } else if (strcmp(path, "/api/bot_load_config") == 0) {
+                send_json(client, "{\"ok\":true,\"config\":{}}");
+            } else if (strcmp(path, "/api/bot_log") == 0) {
+                send_json(client, "{\"ok\":true,\"text\":\"\"}");
+            } else {
+                send_json(client, "{\"ok\":false,\"error\":\"Auto-Hold Bot ใช้ได้ในแอป Android (NativeApp) เท่านั้น\"}");
+            }
+            free(req);
+            return;
+        }
     } else if (strcmp(method, "POST") == 0) {
         if (strcmp(path, "/api/add") == 0) {
             char u[MAX_USERNAME], p[MAX_PASSWORD];
@@ -221,6 +241,13 @@ static void handle_client(SOCKET client) {
             strcmp(path, "/api/dump") == 0 || strcmp(path, "/api/close") == 0 ||
             strcmp(path, "/api/grab") == 0) {
             send_json(client, "{\"ok\":true,\"opened\":[],\"failed\":[],\"got\":0,\"port\":\"WebView\"}");
+            free(req);
+            return;
+        }
+        /* Auto-Hold Bot: ตรรกะอยู่ในแอป Android (Java + C core) — เซิร์ฟเวอร์ C ล้วน
+         * ไม่มี ADB/WebView จึงคืนข้อความอธิบายแทน (UI ใน dashboard.html ยังทำงานได้) */
+        if (strncmp(path, "/api/bot_", 9) == 0) {
+            send_json(client, "{\"ok\":false,\"error\":\"Auto-Hold Bot ใช้ได้ในแอป Android (NativeApp) — เปิดแอปแล้วเลือกเมนู 🤖 Auto-Hold Bot\"}");
             free(req);
             return;
         }

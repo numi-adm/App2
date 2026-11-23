@@ -5,6 +5,7 @@ add_library(
     roblox_dash
     SHARED
     native_core.c
+    bot_core.c
 )
 
 find_library(
@@ -12,7 +13,13 @@ find_library(
     log
 )
 
+find_library(
+    m-lib
+    m
+)
+
 target_link_libraries(
     roblox_dash
     ${log-lib}
+    ${m-lib}
 )
