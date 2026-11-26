@@ -70,8 +70,7 @@ jobs:
               tail -n 160 "$LOG"
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
-            grep -E 'error:|FAILURE:|Execution failed|What went wrong' "$LOG" \
-              | head -n 30 \
+            tail -n 45 "$LOG" \
               | while IFS= read -r line; do
                   safe=$(printf '%s' "$line" | cut -c1-300)
                   echo "::error::$safe"
