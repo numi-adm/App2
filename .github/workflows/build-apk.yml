@@ -2,11 +2,11 @@ name: Build Android APK (C NDK)
 
 on:
   push:
-    branches: [ "*" ]
+    branches: [ "main" ]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -77,6 +77,26 @@ jobs:
                 done
           fi
           exit "$rc"
+
+      # เก็บ log ไว้บน branch ci-diagnostics เพื่อดู error จาก build ที่ล้มเหลวได้โดยไม่ต้องล็อกอิน
+      - name: Publish failure log branch
+        if: failure()
+        shell: bash
+        run: |
+          [ -f /tmp/gradle-build.log ] || exit 0
+          cd "$GITHUB_WORKSPACE"
+          git config user.name "CI Diagnostics"
+          git config user.email "ci@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git checkout -B ci-diagnostics
+          cp /tmp/gradle-build.log gradle-failure.log
+          git add -f gradle-failure.log
+          if git diff --cached --quiet; then
+            echo "Log unchanged"
+          else
+            git commit -m "CI failure log"
+            git push --force origin ci-diagnostics
+          fi
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
