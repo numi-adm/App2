@@ -34,6 +34,8 @@ final class AutoHoldBot {
     /** โหมด WebView: แอปเป็นคนจับภาพ/ส่งทัชเอง (ไม่ต้องใช้ ADB) */
     interface CaptureProvider {
         Frame capture();   // เรียกจาก worker thread — implementation ต้องจัดการ UI thread เอง
+        /** เหตุผลที่แคปไม่ได้ครั้งล่าสุด (ว่าง = ปกติ) — เอาไปโชว์ใน log ให้รู้ว่าติดตรงไหน */
+        default String lastError() { return ""; }
     }
 
     interface TouchProvider {
@@ -109,6 +111,11 @@ final class AutoHoldBot {
         touchProvider = p;
     }
 
+    /** เขียนข้อความลง log ของบอท (ให้ฝั่งแอปรายงานเหตุ เช่น แคปภาพไม่สำเร็จ) */
+    void note(String text, String color) {
+        emit(text, color, true);
+    }
+
     // ------------------------------------------------------------------
     // การเชื่อมต่อ
     // ------------------------------------------------------------------
@@ -168,7 +175,10 @@ final class AutoHoldBot {
             emit("🌐 ใช้โหมด WebView (กดในหน้าเว็บ — ไม่ต้อง ADB)", "#3498db", true);
             Frame test = capture();
             if (test == null) {
-                emit("⚠️ ยังจับภาพ WebView ไม่ได้ — เปิดแผง browser/game ให้มองเห็นก่อนครับ", "#e67e22", true);
+                String why = captureProvider.lastError();
+                emit("⚠️ ยังจับภาพ WebView ไม่ได้"
+                        + (why == null || why.isEmpty() ? "" : " (" + why + ")")
+                        + " — เปิดแผง browser/game ให้มองเห็นก่อนครับ", "#e67e22", true);
             } else {
                 emit("📷 WebView พร้อมสแกน " + test.w + "x" + test.h, "#27ae60", true);
             }
@@ -218,6 +228,8 @@ final class AutoHoldBot {
             j.put("templates", templates.size());
             j.put("releaseTemplates", releaseTemplates.size());
             j.put("bestScore", lastBestScore);
+            j.put("captureError", "webview".equals(controlMode) && captureProvider != null
+                    ? captureProvider.lastError() : "");
             j.put("last", lastText);
         } catch (Exception ignored) {
         }
@@ -397,7 +409,10 @@ final class AutoHoldBot {
             String hint = "webview".equals(controlMode)
                     ? "เปิดแผง browser/game ให้มองเห็นก่อน"
                     : "ตรวจสอบ ADB/จอ MuMu";
-            return "{\"ok\":false,\"error\":\"ดึงภาพไม่ได้ — " + hint + "\"}";
+            String why = ("webview".equals(controlMode) && captureProvider != null)
+                    ? captureProvider.lastError() : "";
+            String detail = (why == null || why.isEmpty()) ? hint : (why + " — " + hint);
+            return "{\"ok\":false,\"error\":\"ดึงภาพไม่ได้ — " + detail + "\"}";
         }
         try {
             int[] argb = new int[f.w * f.h];
@@ -532,11 +547,17 @@ final class AutoHoldBot {
                 Frame img = capture();
                 if (img == null) {
                     fails++;
-                    String hint = "webview".equals(controlMode)
+                    boolean web = "webview".equals(controlMode);
+                    String why = (web && captureProvider != null) ? captureProvider.lastError() : "";
+                    String hint = web
                             ? "เปิดแผง browser/game ให้มองเห็นอยู่ไหม?" : "จอ MuMu/ADB ยังเปิดอยู่ไหม?";
-                    if (fails == 1) emit("⚠️ ดึงภาพไม่ได้ — " + hint, "#e67e22", true);
+                    String detail = (why == null || why.isEmpty()) ? hint : (why + " — " + hint);
+                    if (fails == 1) emit("⚠️ ดึงภาพไม่ได้ — " + detail, "#e67e22", true);
                     else if (fails == 3) reconnect();
-                    else if (fails % 6 == 0) emit("⚠️ ยังดึงภาพไม่ได้ (" + fails + " ครั้ง) — " + hint, "#c0392b", true);
+                    /* ไม่สแปม log ทุกวินาที — เตือนซ้ำทุก ~30 วิ พร้อมเหตุผลล่าสุด */
+                    else if (fails % 30 == 0) {
+                        emit("⚠️ ยังดึงภาพไม่ได้ (" + fails + " ครั้ง) — " + detail, "#c0392b", true);
+                    }
                     sleep(fails < 3 ? 400 : 1000);
                     continue;
                 }

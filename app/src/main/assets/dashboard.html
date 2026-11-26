@@ -599,7 +599,7 @@ function botOnModeChange(syncAuto) {
   const cm = $('botControl') ? $('botControl').value : 'webview';
   const note = $('botModeNote');
   if (note) note.textContent = cm === 'webview'
-    ? 'โหมด WebView: เปิดแผง browser/game ขึ้นมาก่อน แล้วบอทจะกดในหน้าเว็บนั้นเลย'
+    ? 'โหมด WebView: เปิดหน้าเกมในแผง browser ค้างไว้ แล้ว "แตะบรรทัด 🤖 บอท" บนแถบด้านบนเพื่อเริ่ม/หยุด (ไม่ต้องกลับมาหน้านี้)'
     : 'โหมด ADB: ใส่ IP/พอร์ต MuMu หรืออุปกรณ์ แล้วกด 🔌 เชื่อมต่อ (หรือ auto-connect)';
   if (syncAuto !== false && $('botAuto')) $('botAuto').checked = cm === 'adb';
   botStatusRefresh();
@@ -689,6 +689,10 @@ function botTestTapUI() {
 async function botStartUI() {
   await api('/api/bot_start', {config: botCfg()});
   $('botLog').textContent = '▶ กำลังเริ่มบอท...';
+  const cm = $('botControl') ? $('botControl').value : 'webview';
+  if (cm === 'webview') {
+    toast('โหมด WebView: เปิดหน้าเกมในแผง browser ค้างไว้ แล้วแตะแถบ 🤖 บอท ด้านบนเพื่อเริ่ม/หยุด');
+  }
   botStatusRefresh();
 }
 

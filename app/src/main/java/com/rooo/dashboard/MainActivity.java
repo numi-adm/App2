@@ -141,7 +141,13 @@ public class MainActivity extends Activity {
             new java.util.concurrent.atomic.AtomicBoolean(false);
 
     /* โหมด WebView: จับภาพและส่งทัชจาก robloxWebView โดยตรง (ไม่ต้อง ADB) */
-    private final AutoHoldBot.CaptureProvider webCaptureProvider = () -> captureWebViewFrame();
+    private volatile String lastWebCaptureError = "";
+    private int pixelCopyFails = 0;
+    private long pixelCopySkipUntil = 0L;
+    private final AutoHoldBot.CaptureProvider webCaptureProvider = new AutoHoldBot.CaptureProvider() {
+        @Override public AutoHoldBot.Frame capture() { return captureWebViewFrame(); }
+        @Override public String lastError() { return lastWebCaptureError; }
+    };
     private long webTouchDownTime = 0L;
     private final AutoHoldBot.TouchProvider webTouchProvider = new AutoHoldBot.TouchProvider() {
         @Override public void down(int x, int y) { webTouchDownTime = SystemClock.uptimeMillis(); postWebTouch(MotionEvent.ACTION_DOWN, x, y, webTouchDownTime); }
@@ -175,6 +181,13 @@ public class MainActivity extends Activity {
         autoHoldBot = new AutoHoldBot((text, color, force) -> notifyBot(text, color, force), botStorage);
         autoHoldBot.setCaptureProvider(webCaptureProvider);
         autoHoldBot.setTouchProvider(webTouchProvider);
+        try {
+            android.content.pm.PackageInfo pi = getPackageManager()
+                    .getPackageInfo(getPackageName(), 0);
+            autoHoldBot.note("🧩 แอปเวอร์ชัน " + pi.versionName
+                    + " (build " + pi.versionCode + ")", "#8ecbff");
+        } catch (Exception ignored) {
+        }
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.parseColor("#1e1e1e"));
@@ -256,14 +269,6 @@ public class MainActivity extends Activity {
         browserStatusBadge.setText("กำลังโหลดและเช็คสถานะ...");
         titleCol.addView(browserStatusBadge);
 
-        botBadge = new TextView(this);
-        botBadge.setTextColor(Color.parseColor("#8ecbff"));
-        botBadge.setTextSize(10f);
-        botBadge.setSingleLine(true);
-        botBadge.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        botBadge.setText("🤖 บอท: ปิดอยู่");
-        titleCol.addView(botBadge);
-
         LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         topBar.addView(titleCol, titleLp);
@@ -294,6 +299,20 @@ public class MainActivity extends Activity {
         topBar.addView(btnCloseNext);
 
         browserContainer.addView(topBar, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        /* แถวบอทเต็มความกว้าง — แตะเพื่อเปิด/หยุดบอท (ปุ่มบนแถบเครื่องมือมีเยอะจนล้นจอ) */
+        botBadge = new TextView(this);
+        botBadge.setTextColor(Color.parseColor("#8ecbff"));
+        botBadge.setTextSize(10.5f);
+        botBadge.setSingleLine(true);
+        botBadge.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        botBadge.setText("🤖 บอท: ปิดอยู่ — แตะบรรทัดนี้เพื่อเริ่ม/หยุด");
+        botBadge.setBackgroundColor(Color.parseColor("#202a33"));
+        botBadge.setPadding(dp(8), dp(5), dp(8), dp(5));
+        botBadge.setOnClickListener(v -> toggleBotFromBar());
+        browserContainer.addView(botBadge, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -341,6 +360,9 @@ public class MainActivity extends Activity {
 
     private void inspectCurrentRobloxPage() {
         if (!browserOpen || activeAccountIdx < 0) return;
+        /* ระหว่างบอท WebView กำลังกดค้าง/สแกนหน้าเกม ไม่ต้องตรวจสถานะหรือเปลี่ยนหน้า
+         * (การ navigate/ปิดแผงจะทำให้บอทหลุดโฟกัสและจับภาพไม่ได้) */
+        if (botRunningInWebView()) return;
 
         final int idx = activeAccountIdx;
         robloxWebView.evaluateJavascript(JS_INSPECT_PAGE, value -> {
@@ -712,6 +734,12 @@ public class MainActivity extends Activity {
         if (!accountQueue.isEmpty()) {
             int nextIdx = accountQueue.remove(0);
             openAccountInWebView(nextIdx, currentCleanSession, currentAutoFill);
+        } else if (botRunningInWebView()) {
+            /* บอท WebView ต้องใช้แผงนี้จับภาพ — ห้ามปิดแผงตอนคิวหมด ไม่งั้นบอทจะดึงภาพไม่ได้ */
+            autoCheckMode = false;
+            autoAdvanceMode = false;
+            advanceScheduled = false;
+            notifyDashboard("ครบทุกไอดีในคิวแล้ว — คงหน้าเว็บไว้ให้บอททำงานต่อ");
         } else {
             stopQueueAndCloseBrowser();
             notifyDashboard("ครบทุกไอดีในคิวแล้ว!");
@@ -940,6 +968,12 @@ public class MainActivity extends Activity {
 
     /* หยุดการทำงานทั้งหมดและกลับหน้าหลัก (หยุดกลางทาง) */
     private void stopQueueAndCloseBrowser() {
+        /* แผงนี้คือแหล่งภาพของบอท WebView — ปิดแผงแล้วบอทจะดึงภาพไม่ได้ตลอด
+         * จึงหยุดบอทให้ก่อน แทนที่จะปล่อยให้ฟ้อง error รัว ๆ */
+        if (botRunningInWebView()) {
+            autoHoldBot.stop();
+            notifyBot("⏹ ปิดแผง browser — หยุดบอทให้อัตโนมัติ", "#7f8c8d", true);
+        }
         grabCookieInternal();
         accountQueue.clear();
         browserOpen = false;
@@ -973,63 +1007,165 @@ public class MainActivity extends Activity {
     // Auto-Hold Bot: โหมด WebView / เชื่อมต่อ ADB อัตโนมัติ / นำเข้าต้นแบบ
     // ------------------------------------------------------------------
 
-    /** จับภาพ robloxWebView ที่กำลังมองเห็น → RGBA (เรียกจาก worker thread) */
+    /** จับภาพ robloxWebView ที่กำลังมองเห็น → RGBA (เรียกจาก worker thread)
+     *  ลำดับ: PixelCopy (ได้ surface จริงรวม WebGL) → WebView.draw() (สำรอง)
+     *  ถ้าทั้งคู่ไม่ได้ จะเก็บเหตุผลไว้ใน lastWebCaptureError ให้ log บอกได้ว่าติดอะไร */
     private AutoHoldBot.Frame captureWebViewFrame() {
-        if (robloxWebView == null || browserContainer == null
-                || browserContainer.getVisibility() != View.VISIBLE) return null;
-        final int[] wh = new int[2];
-        final byte[][] out = new byte[1][];
+        if (robloxWebView == null || browserContainer == null) {
+            lastWebCaptureError = "ยังไม่มี WebView";
+            return null;
+        }
+        if (browserContainer.getVisibility() != View.VISIBLE) {
+            lastWebCaptureError = "แผง browser ปิดอยู่";
+            return null;
+        }
+        final int w = robloxWebView.getWidth(), h = robloxWebView.getHeight();
+        if (w <= 4 || h <= 4) {
+            lastWebCaptureError = "WebView ขนาด " + w + "x" + h;
+            return null;
+        }
+        if ((long) w * h > 8_000_000L) {
+            lastWebCaptureError = "WebView ใหญ่เกิน " + w + "x" + h;
+            return null;
+        }
+
+        AutoHoldBot.Frame f = null;
+        boolean skipPixelCopy = System.currentTimeMillis() < pixelCopySkipUntil;
+        if (!skipPixelCopy) {
+            f = capturePixelCopy(w, h);
+            if (f != null) {
+                pixelCopyFails = 0;
+                pixelCopySkipUntil = 0L;
+                lastWebCaptureError = "";
+                return f;
+            }
+            String pcErr = lastWebCaptureError;
+            /* PixelCopy ล้มติดกันหลายครั้ง (บางเครื่อง/บางจอไม่ให้แคป) → ข้ามไปใช้ draw()
+             * สักพักเพื่อไม่ให้ทุกรอบเสียเวลา 0.8 วิ แล้วค่อยลองใหม่ */
+            if (++pixelCopyFails >= 5) {
+                pixelCopySkipUntil = System.currentTimeMillis() + 30000L;
+                pixelCopyFails = 0;
+                if (autoHoldBot != null) {
+                    autoHoldBot.note("⚠️ PixelCopy ใช้ไม่ได้ (" + pcErr + ") — ใช้ draw() แทนชั่วคราว", "#e67e22");
+                }
+            }
+            f = captureWebViewDraw(w, h);
+            if (f != null) {
+                lastWebCaptureError = "";
+                return f;
+            }
+            lastWebCaptureError = "PixelCopy " + (pcErr.isEmpty() ? "ล้มเหลว" : pcErr)
+                    + " / draw " + (lastWebCaptureError.isEmpty() ? "ล้มเหลว" : lastWebCaptureError);
+            return null;
+        }
+
+        f = captureWebViewDraw(w, h);
+        if (f != null) {
+            lastWebCaptureError = "";
+            return f;
+        }
+        return null;
+    }
+
+    /** แคปจาก surface ของหน้าต่างจริง (ภาพตรงกับที่เห็น รวม canvas/WebGL) */
+    private AutoHoldBot.Frame capturePixelCopy(final int w, final int h) {
+        if (Build.VERSION.SDK_INT < 26) {
+            lastWebCaptureError = "Android ต่ำกว่า 8";
+            return null;
+        }
+        final Bitmap[] bmp = new Bitmap[1];
+        final int[] err = new int[1];
+        final boolean[] ok = new boolean[1];
+        final boolean[] abandoned = new boolean[1];
         final CountDownLatch latch = new CountDownLatch(1);
         runOnUiThread(() -> {
-            Bitmap bm = null;
             try {
-                int w = robloxWebView.getWidth(), h = robloxWebView.getHeight();
-                if (w > 4 && h > 4 && w * h <= 8_000_000) {
-                    bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-                    /* PixelCopy อ่านจาก surface จริง — จำเป็นสำหรับ canvas/WebGL */
-                    if (Build.VERSION.SDK_INT >= 26 && robloxWebView.isAttachedToWindow()
-                            && getWindow() != null) {
+                if (getWindow() == null || !robloxWebView.isAttachedToWindow()) {
+                    err[0] = -1;
+                } else {
+                    bmp[0] = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                    int[] loc = new int[2];
+                    robloxWebView.getLocationInWindow(loc);
+                    final Rect rect = new Rect(loc[0], loc[1], loc[0] + w, loc[1] + h);
+                    final Bitmap shot = bmp[0];
+                    PixelCopy.request(getWindow(), rect, shot, result -> {
                         try {
-                            final Bitmap shot = bm;
-                            int[] loc = new int[2];
-                            robloxWebView.getLocationInWindow(loc);
-                            final Rect rect = new Rect(loc[0], loc[1], loc[0] + w, loc[1] + h);
-                            PixelCopy.request(getWindow(), rect, shot, result -> {
-                                try {
-                                    if (result == PixelCopy.SUCCESS) {
-                                        out[0] = AutoHoldBot.bitmapToRgba(shot);
-                                        wh[0] = w;
-                                        wh[1] = h;
-                                    }
-                                } catch (Exception ignored) {
-                                } finally {
-                                    shot.recycle();
-                                    latch.countDown();
-                                }
-                            }, new Handler(Looper.getMainLooper()));
-                            return;   // รอ callback — อย่า recycle ก่อนถึงตรงนี้
+                            if (result == PixelCopy.SUCCESS) {
+                                ok[0] = true;
+                            } else {
+                                err[0] = result;
+                            }
                         } catch (Exception ignored) {
-                            /* fallback → WebView.draw() ด้านล่าง */
+                        } finally {
+                            if (abandoned[0]) shot.recycle();
+                            latch.countDown();
                         }
-                    }
-                    Canvas c = new Canvas(bm);
-                    robloxWebView.draw(c);
-                    out[0] = AutoHoldBot.bitmapToRgba(bm);
-                    wh[0] = w;
-                    wh[1] = h;
+                    }, new Handler(Looper.getMainLooper()));
+                    return;   // รอ callback เป็นคนนับ latch
                 }
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                err[0] = -2;
+                lastWebCaptureError = "ข้อยกเว้น " + e.getClass().getSimpleName();
             }
-            if (bm != null && out[0] == null) bm.recycle();
             latch.countDown();
         });
+
         try {
-            if (!latch.await(2, TimeUnit.SECONDS)) return null;
+            if (!latch.await(800, TimeUnit.MILLISECONDS)) {
+                abandoned[0] = true;   // callback จะ recycle เองถ้ามาถึงทีหลัง
+                lastWebCaptureError = "หมดเวลา";
+                return null;
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return null;
         }
-        return out[0] == null ? null : new AutoHoldBot.Frame(wh[0], wh[1], out[0]);
+
+        Bitmap shot = bmp[0];
+        if (!ok[0] || shot == null) {
+            if (err[0] == -1) lastWebCaptureError = "WebView ยังไม่ถูกวาดบนจอ";
+            else if (err[0] == -2) { /* เก็บข้อความไว้แล้ว */ }
+            else lastWebCaptureError = "error " + err[0];
+            if (shot != null) shot.recycle();
+            return null;
+        }
+        try {
+            return new AutoHoldBot.Frame(w, h, AutoHoldBot.bitmapToRgba(shot));
+        } catch (Exception e) {
+            lastWebCaptureError = "แปลงภาพไม่ได้";
+            return null;
+        } finally {
+            shot.recycle();
+        }
+    }
+
+    /** สำรอง: วาด WebView ลง bitmap ตรง ๆ (ไม่ต้องพึ่ง surface/สิทธิ์แคปจอ) */
+    private AutoHoldBot.Frame captureWebViewDraw(final int w, final int h) {
+        final AutoHoldBot.Frame[] out = new AutoHoldBot.Frame[1];
+        final CountDownLatch latch = new CountDownLatch(1);
+        runOnUiThread(() -> {
+            Bitmap bm = null;
+            try {
+                bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                robloxWebView.draw(new Canvas(bm));
+                out[0] = new AutoHoldBot.Frame(w, h, AutoHoldBot.bitmapToRgba(bm));
+            } catch (Exception e) {
+                lastWebCaptureError = "ข้อยกเว้น " + e.getClass().getSimpleName();
+            } finally {
+                if (bm != null) bm.recycle();
+                latch.countDown();
+            }
+        });
+        try {
+            if (!latch.await(1500, TimeUnit.MILLISECONDS)) {
+                lastWebCaptureError = "หมดเวลา";
+                return null;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+        return out[0];
     }
 
     /** ส่งทัชจริงเข้า WebView (trusted event — ใช้กับ canvas/WebGL ได้) */
@@ -1041,7 +1177,10 @@ public class MainActivity extends Activity {
                 long now = SystemClock.uptimeMillis();
                 long dt = downTime > 0 ? downTime : now;
                 MotionEvent ev = MotionEvent.obtain(dt, now, action, x, y, 1.0f, 1.0f, 0,
-                        1.0f, 1.0f, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN);
+                        1.0f, 1.0f, 0, 0);
+                /* obtain(...) 12 พารามิเตอร์ ตัวสุดท้ายคือ edgeFlags ไม่ใช่ source
+                 * ต้องตั้ง source เอง ไม่งั้น WebView เห็นเป็น SOURCE_UNKNOWN */
+                ev.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
                 try {
                     robloxWebView.dispatchTouchEvent(ev);
                 } finally {
@@ -1050,6 +1189,28 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {
             }
         });
+    }
+
+    /** แตะบรรทัดบอทบนแถบ browser เพื่อเปิด/หยุดบอท (ใช้ค่าที่บันทึกไว้จากหน้า dashboard) */
+    private void toggleBotFromBar() {
+        if (autoHoldBot == null) return;
+        if (autoHoldBot.isRunning()) {
+            autoHoldBot.stop();
+            return;
+        }
+        JSONObject cfg = botStorage.loadConfig();
+        try {
+            cfg.put("controlMode", "webview");
+        } catch (Exception ignored) {
+        }
+        autoHoldBot.setControlMode("webview");
+        /* start() มีการแคปทดสอบ (รอ UI thread) — ห้ามเรียกบน UI thread ตรง ๆ ไม่งั้นจอค้าง */
+        new Thread(() -> autoHoldBot.start(cfg), "bot-start").start();
+    }
+
+    private boolean botRunningInWebView() {
+        return autoHoldBot != null && autoHoldBot.isRunning()
+                && "webview".equals(autoHoldBot.controlMode());
     }
 
     /** ทดสอบส่งทัชเข้า WebView (x,y < 0 = กึ่งกลาง) — ใช้ดีบักว่าบอทกดได้จริงไหม */
