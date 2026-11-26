@@ -1059,10 +1059,11 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "ขนาด WebView ไม่พร้อมครับ", Toast.LENGTH_SHORT).show();
             return;
         }
-        webTouchProvider.down(x, y);
-        mainHandler.postDelayed(() -> webTouchProvider.up(x, y), 90);
-        Toast.makeText(this, "ส่งทัชทดสอบที่ (" + x + ", " + y + ")", Toast.LENGTH_SHORT).show();
-        notifyBot("👆 ทดสอบแตะที่ (" + x + ", " + y + ")", "#8ecbff", true);
+        final int fx = x, fy = y;
+        webTouchProvider.down(fx, fy);
+        mainHandler.postDelayed(() -> webTouchProvider.up(fx, fy), 90);
+        Toast.makeText(this, "ส่งทัชทดสอบที่ (" + fx + ", " + fy + ")", Toast.LENGTH_SHORT).show();
+        notifyBot("👆 ทดสอบแตะที่ (" + fx + ", " + fy + ")", "#8ecbff", true);
     }
 
     /** พยายามเชื่อมต่อ ADB อัตโนมัติตอนเปิดแอป (ไม่บล็อก UI thread) */
