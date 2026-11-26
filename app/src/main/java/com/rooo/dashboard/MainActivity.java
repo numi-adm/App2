@@ -10,6 +10,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -971,10 +972,14 @@ public class MainActivity extends Activity {
                 if (w > 4 && h > 4 && w * h <= 8_000_000) {
                     bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
                     /* PixelCopy อ่านจาก surface จริง — จำเป็นสำหรับ canvas/WebGL */
-                    if (Build.VERSION.SDK_INT >= 26 && robloxWebView.isAttachedToWindow()) {
+                    if (Build.VERSION.SDK_INT >= 26 && robloxWebView.isAttachedToWindow()
+                            && getWindow() != null) {
                         try {
                             final Bitmap shot = bm;
-                            PixelCopy.request(robloxWebView, shot, result -> {
+                            int[] loc = new int[2];
+                            robloxWebView.getLocationInWindow(loc);
+                            final Rect rect = new Rect(loc[0], loc[1], loc[0] + w, loc[1] + h);
+                            PixelCopy.request(getWindow(), rect, shot, result -> {
                                 try {
                                     if (result == PixelCopy.SUCCESS) {
                                         out[0] = AutoHoldBot.bitmapToRgba(shot);
