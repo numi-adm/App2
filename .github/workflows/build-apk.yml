@@ -2,7 +2,7 @@ name: Build Android APK (C NDK)
 
 on:
   push:
-    branches: [ "main" ]
+    branches-ignore: [ "ci-diagnostics" ]
   workflow_dispatch:
 
 permissions:
