@@ -109,6 +109,7 @@ public class MainActivity extends Activity {
     private LinearLayout browserContainer;
     private TextView browserTitle;
     private TextView browserStatusBadge;
+    private TextView botBadge;   // แสดง log บอทบนแถบ browser (ไม่รบกวนการจับภาพ WebView)
 
     private ValueCallback<Uri[]> fileUploadCallback;
     private String pendingCsvExport = "";
@@ -254,6 +255,14 @@ public class MainActivity extends Activity {
         browserStatusBadge.setTextSize(11f);
         browserStatusBadge.setText("กำลังโหลดและเช็คสถานะ...");
         titleCol.addView(browserStatusBadge);
+
+        botBadge = new TextView(this);
+        botBadge.setTextColor(Color.parseColor("#8ecbff"));
+        botBadge.setTextSize(10f);
+        botBadge.setSingleLine(true);
+        botBadge.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        botBadge.setText("🤖 บอท: ปิดอยู่");
+        titleCol.addView(botBadge);
 
         LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
@@ -1204,6 +1213,13 @@ public class MainActivity extends Activity {
                 j.put("text", text == null ? "" : text);
                 j.put("color", color == null ? "#3498db" : color);
                 j.put("force", force);
+                if (botBadge != null) {
+                    botBadge.setText("🤖 " + (text == null ? "" : text));
+                    try {
+                        botBadge.setTextColor(Color.parseColor(color));
+                    } catch (Exception ignored) {
+                    }
+                }
                 dashWebView.evaluateJavascript(
                         "if(window.onBotUpdate) window.onBotUpdate(" + j.toString() + ");", null);
             } catch (Exception ignored) {
