@@ -51,14 +51,27 @@ jobs:
       - name: Build Debug APK
         shell: bash
         run: |
+          LOG=/tmp/gradle-build.log
+          rc=1
           if [ -f "settings.gradle" ]; then
-            gradle assembleDebug --no-daemon --stacktrace
+            gradle assembleDebug --no-daemon --stacktrace 2>&1 | tee "$LOG"
+            rc=${PIPESTATUS[0]}
           elif [ -f "mobile_c_app/settings.gradle" ]; then
-            cd mobile_c_app && gradle assembleDebug --no-daemon --stacktrace
+            cd mobile_c_app
+            gradle assembleDebug --no-daemon --stacktrace 2>&1 | tee "$LOG"
+            rc=${PIPESTATUS[0]}
           else
-            echo "settings.gradle not found" >&2
-            exit 1
+            echo "settings.gradle not found" | tee "$LOG" >&2
           fi
+          if [ "$rc" -ne 0 ]; then
+            {
+              echo "### Build failure output"
+              echo '```text'
+              tail -n 160 "$LOG"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$rc"
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
