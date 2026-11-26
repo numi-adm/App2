@@ -8,12 +8,17 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Color;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.view.Gravity;
+import android.view.MotionEvent;
+import android.view.PixelCopy;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
@@ -46,8 +51,10 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class MainActivity extends Activity {
@@ -130,6 +137,15 @@ public class MainActivity extends Activity {
     private final java.util.concurrent.atomic.AtomicBoolean autoConnectStop =
             new java.util.concurrent.atomic.AtomicBoolean(false);
 
+    /* โหมด WebView: จับภาพและส่งทัชจาก robloxWebView โดยตรง (ไม่ต้อง ADB) */
+    private final AutoHoldBot.CaptureProvider webCaptureProvider = () -> captureWebViewFrame();
+    private long webTouchDownTime = 0L;
+    private final AutoHoldBot.TouchProvider webTouchProvider = new AutoHoldBot.TouchProvider() {
+        @Override public void down(int x, int y) { webTouchDownTime = SystemClock.uptimeMillis(); postWebTouch(MotionEvent.ACTION_DOWN, x, y, webTouchDownTime); }
+        @Override public void move(int x, int y) { postWebTouch(MotionEvent.ACTION_MOVE, x, y, webTouchDownTime); }
+        @Override public void up(int x, int y) { postWebTouch(MotionEvent.ACTION_UP, x, y, webTouchDownTime); }
+    };
+
     private final Runnable liveInspectorRunnable = new Runnable() {
         @Override
         public void run() {
@@ -154,6 +170,8 @@ public class MainActivity extends Activity {
 
         botStorage = new BotStorage(this);
         autoHoldBot = new AutoHoldBot((text, color, force) -> notifyBot(text, color, force), botStorage);
+        autoHoldBot.setCaptureProvider(webCaptureProvider);
+        autoHoldBot.setTouchProvider(webTouchProvider);
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.parseColor("#1e1e1e"));
@@ -936,25 +954,111 @@ public class MainActivity extends Activity {
     }
 
     // ------------------------------------------------------------------
-    // Auto-Hold Bot: เชื่อมต่อ ADB อัตโนมัติ / นำเข้าต้นแบบจากไฟล์
+    // Auto-Hold Bot: โหมด WebView / เชื่อมต่อ ADB อัตโนมัติ / นำเข้าต้นแบบ
     // ------------------------------------------------------------------
+
+    /** จับภาพ robloxWebView ที่กำลังมองเห็น → RGBA (เรียกจาก worker thread) */
+    private AutoHoldBot.Frame captureWebViewFrame() {
+        if (robloxWebView == null || browserContainer == null
+                || browserContainer.getVisibility() != View.VISIBLE) return null;
+        final int[] wh = new int[2];
+        final byte[][] out = new byte[1][];
+        final CountDownLatch latch = new CountDownLatch(1);
+        runOnUiThread(() -> {
+            Bitmap bm = null;
+            try {
+                int w = robloxWebView.getWidth(), h = robloxWebView.getHeight();
+                if (w > 4 && h > 4 && w * h <= 8_000_000) {
+                    bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                    /* PixelCopy อ่านจาก surface จริง — จำเป็นสำหรับ canvas/WebGL */
+                    if (Build.VERSION.SDK_INT >= 26 && robloxWebView.isAttachedToWindow()) {
+                        try {
+                            final Bitmap shot = bm;
+                            PixelCopy.request(robloxWebView, shot, result -> {
+                                try {
+                                    if (result == PixelCopy.SUCCESS) {
+                                        out[0] = AutoHoldBot.bitmapToRgba(shot);
+                                        wh[0] = w;
+                                        wh[1] = h;
+                                    }
+                                } catch (Exception ignored) {
+                                } finally {
+                                    shot.recycle();
+                                    latch.countDown();
+                                }
+                            }, new Handler(Looper.getMainLooper()));
+                            return;   // รอ callback — อย่า recycle ก่อนถึงตรงนี้
+                        } catch (Exception ignored) {
+                            /* fallback → WebView.draw() ด้านล่าง */
+                        }
+                    }
+                    Canvas c = new Canvas(bm);
+                    robloxWebView.draw(c);
+                    out[0] = AutoHoldBot.bitmapToRgba(bm);
+                    wh[0] = w;
+                    wh[1] = h;
+                }
+            } catch (Exception ignored) {
+            }
+            if (bm != null && out[0] == null) bm.recycle();
+            latch.countDown();
+        });
+        try {
+            if (!latch.await(2, TimeUnit.SECONDS)) return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+        return out[0] == null ? null : new AutoHoldBot.Frame(wh[0], wh[1], out[0]);
+    }
+
+    /** ส่งทัชจริงเข้า WebView (trusted event — ใช้กับ canvas/WebGL ได้) */
+    private void postWebTouch(final int action, final int x, final int y, final long downTime) {
+        runOnUiThread(() -> {
+            try {
+                if (robloxWebView == null) return;
+                robloxWebView.requestFocus();
+                long now = SystemClock.uptimeMillis();
+                long dt = downTime > 0 ? downTime : now;
+                MotionEvent ev = MotionEvent.obtain(dt, now, action, x, y, 1.0f, 1.0f, 0,
+                        1.0f, 1.0f, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN);
+                try {
+                    robloxWebView.dispatchTouchEvent(ev);
+                } finally {
+                    ev.recycle();
+                }
+            } catch (Exception ignored) {
+            }
+        });
+    }
 
     /** พยายามเชื่อมต่อ ADB อัตโนมัติตอนเปิดแอป (ไม่บล็อก UI thread) */
     private void autoConnectBot() {
+        autoConnectBot(false);
+    }
+
+    private void autoConnectBot(boolean force) {
         if (autoHoldBot == null) return;
+        if (force) autoHoldBot.setControlMode("adb");
         new Thread(() -> {
             String host = "127.0.0.1";
             int port = 16384;
             boolean enabled = true;
+            String controlMode = "webview";
             try {
                 JSONObject c = botStorage.loadConfig();
                 enabled = !c.has("autoConnect") || c.optBoolean("autoConnect", true);
                 host = c.optString("host", host);
                 port = c.optInt("port", port);
+                controlMode = c.optString("controlMode", controlMode);
             } catch (Exception ignored) {
             }
 
-            if (!enabled) {
+            if (!force && "webview".equals(controlMode)) {
+                notifyBot("⏭ ข้าม ADB auto-connect (โหมด WebView — กดในหน้าเว็บในแอป)", "#7f8c8d", true);
+                return;
+            }
+            if (!force && !enabled) {
                 notifyBot("⏭ ข้าม ADB auto-connect (ปิดไว้ในตั้งค่า)", "#7f8c8d", true);
                 return;
             }
@@ -1233,6 +1337,7 @@ public class MainActivity extends Activity {
         // ---------------- Auto-Hold Bot (FFFFFF) ----------------
         @JavascriptInterface
         public String botConnect(String host, int port) {
+            autoHoldBot.setControlMode("adb");
             boolean ok = autoHoldBot.connect(host, port);
             JSONObject j = new JSONObject();
             try {
@@ -1350,7 +1455,7 @@ public class MainActivity extends Activity {
         /** สั่งลองเชื่อมต่อ ADB อัตโนมัติอีกครั้ง (จากปุ่มใน UI) */
         @JavascriptInterface
         public void botAutoConnectNow() {
-            autoConnectBot();
+            autoConnectBot(true);
         }
     }
 }

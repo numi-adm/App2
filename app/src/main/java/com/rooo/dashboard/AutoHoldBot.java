@@ -31,6 +31,17 @@ final class AutoHoldBot {
         void onStatus(String text, String color, boolean force);
     }
 
+    /** โหมด WebView: แอปเป็นคนจับภาพ/ส่งทัชเอง (ไม่ต้องใช้ ADB) */
+    interface CaptureProvider {
+        Frame capture();   // เรียกจาก worker thread — implementation ต้องจัดการ UI thread เอง
+    }
+
+    interface TouchProvider {
+        void down(int x, int y);
+        void move(int x, int y);
+        void up(int x, int y);
+    }
+
     private static final String TAG = "AutoHoldBot";
     private final Callback cb;
     private final BotStorage storage;
@@ -45,6 +56,9 @@ final class AutoHoldBot {
     private Thread drifter;
     private final AtomicBoolean drifterStop = new AtomicBoolean(false);
     private AdbClient adb;
+    private CaptureProvider captureProvider;
+    private TouchProvider touchProvider;
+    private String controlMode = "webview";   // "webview" | "adb"
     private volatile boolean holding = false;   // นิ้วกำลังกดค้างอยู่ (กัน MOVE แทรกหลัง UP)
     private JSONObject cfg = new JSONObject();
     private String host = "127.0.0.1";
@@ -72,6 +86,25 @@ final class AutoHoldBot {
         } catch (Exception e) {
             Log.w(TAG, "load saved templates: " + e.getMessage());
         }
+    }
+
+    // ------------------------------------------------------------------
+    // โหมดควบคุม: WebView (ในแอป) หรือ ADB (จอภายนอก)
+    // ------------------------------------------------------------------
+    void setControlMode(String mode) {
+        if ("adb".equals(mode) || "webview".equals(mode)) controlMode = mode;
+    }
+
+    String controlMode() {
+        return controlMode;
+    }
+
+    void setCaptureProvider(CaptureProvider p) {
+        captureProvider = p;
+    }
+
+    void setTouchProvider(TouchProvider p) {
+        touchProvider = p;
     }
 
     // ------------------------------------------------------------------
@@ -110,6 +143,9 @@ final class AutoHoldBot {
     }
 
     boolean isConnected() {
+        if ("webview".equals(controlMode)) {
+            return captureProvider != null && touchProvider != null;
+        }
         return adb != null && adb.isConnected();
     }
 
@@ -119,10 +155,21 @@ final class AutoHoldBot {
     void start(JSONObject config) {
         if (running.get()) return;
         cfg = config != null ? config : new JSONObject();
-        String h = optString(cfg, "host", host);
-        int p = optInt(cfg, "port", port);
-        if (!isConnected() || !h.equals(host) || p != port) {
-            if (!connect(h, p)) return;
+        String mode = optString(cfg, "controlMode", controlMode);
+        setControlMode(mode);
+
+        if ("webview".equals(controlMode)) {
+            if (captureProvider == null || touchProvider == null) {
+                emit("❌ โหมด WebView ยังไม่พร้อม — เปิดแผง browser/game ในแอปก่อน", "#c0392b", true);
+                return;
+            }
+            emit("🌐 ใช้โหมด WebView (กดในหน้าเว็บ — ไม่ต้อง ADB)", "#3498db", true);
+        } else {
+            String h = optString(cfg, "host", host);
+            int p = optInt(cfg, "port", port);
+            if (!isConnected() || !h.equals(host) || p != port) {
+                if (!connect(h, p)) return;
+            }
         }
         stopFlag = false;
         running.set(true);
@@ -153,7 +200,8 @@ final class AutoHoldBot {
         try {
             j.put("running", running.get());
             j.put("connected", isConnected());
-            j.put("target", host + ":" + port);
+            j.put("controlMode", controlMode);
+            j.put("target", "webview".equals(controlMode) ? "webview" : host + ":" + port);
             j.put("sdk", sdk);
             j.put("mode", holdMode);
             j.put("frames", frames);
@@ -337,7 +385,10 @@ final class AutoHoldBot {
     String captureJson() {
         Frame f = capture();
         if (f == null) {
-            return "{\"ok\":false,\"error\":\"ดึงภาพหน้าจอไม่ได้ — ตรวจสอบ ADB/จอ MuMu\"}";
+            String hint = "webview".equals(controlMode)
+                    ? "เปิดแผง browser/game ให้มองเห็นก่อน"
+                    : "ตรวจสอบ ADB/จอ MuMu";
+            return "{\"ok\":false,\"error\":\"ดึงภาพไม่ได้ — " + hint + "\"}";
         }
         try {
             int[] argb = new int[f.w * f.h];
@@ -574,8 +625,12 @@ final class AutoHoldBot {
     }
 
     private void reconnect() {
-        emit("🔌 กำลังเชื่อมต่อ ADB ใหม่...", "#e67e22", true);
         releaseTouch(pressX, pressY);
+        if ("webview".equals(controlMode)) {
+            emit("↻ ตรวจสอบ WebView ใหม่... (เปิดแผง browser/game ไว้นะครับ)", "#e67e22", true);
+            return;
+        }
+        emit("🔌 กำลังเชื่อมต่อ ADB ใหม่...", "#e67e22", true);
         try {
             if (adb != null) adb.close();
             connect(host, port);
@@ -591,11 +646,17 @@ final class AutoHoldBot {
     private boolean pressTouch(int x, int y) {
         try {
             synchronized (holdLock) {
-                if (adb == null || !adb.isConnected()) throw new IOException("ADB หลุด");
                 pressX = x;
                 pressY = y;
-                adb.shell("input motionevent DOWN " + x + " " + y);
-                holdMode = "motion";
+                if ("webview".equals(controlMode)) {
+                    if (touchProvider == null) throw new IOException("WebView ไม่พร้อม");
+                    touchProvider.down(x, y);
+                    holdMode = "webview";
+                } else {
+                    if (adb == null || !adb.isConnected()) throw new IOException("ADB หลุด");
+                    adb.shell("input motionevent DOWN " + x + " " + y);
+                    holdMode = "motion";
+                }
                 holding = true;
                 startDrifter(x, y);
             }
@@ -622,7 +683,10 @@ final class AutoHoldBot {
                 try {
                     synchronized (holdLock) {
                         /* เช็ค holding ในล็อกอีกครั้ง — กัน MOVE แทรกหลัง UP ไปแล้ว */
-                        if (holding && adb != null && adb.isConnected()) {
+                        if (!holding) continue;
+                        if ("webview".equals(controlMode)) {
+                            if (touchProvider != null) touchProvider.move(x + dx, y + dy);
+                        } else if (adb != null && adb.isConnected()) {
                             adb.shell("input motionevent MOVE " + (x + dx) + " " + (y + dy));
                         }
                     }
@@ -644,7 +708,9 @@ final class AutoHoldBot {
         if (d != null) d.interrupt();
         synchronized (holdLock) {
             try {
-                if ("motion".equals(holdMode) && adb != null && adb.isConnected()) {
+                if ("webview".equals(holdMode)) {
+                    if (touchProvider != null) touchProvider.up(x, y);
+                } else if ("motion".equals(holdMode) && adb != null && adb.isConnected()) {
                     adb.shell("input motionevent UP " + x + " " + y);
                 }
             } catch (Exception ignored) {
@@ -654,6 +720,12 @@ final class AutoHoldBot {
     }
 
     private Frame capture() {
+        if ("webview".equals(controlMode)) {
+            if (captureProvider == null) return null;
+            Frame f = captureProvider.capture();
+            if (f != null) captures++;
+            return f;
+        }
         if (adb == null || !adb.isConnected()) return null;
         try {
             byte[] raw = adb.exec("screencap", 40 * 1024 * 1024);
@@ -799,7 +871,7 @@ final class AutoHoldBot {
         return m.length() > 90 ? m.substring(0, 90) : m;
     }
 
-    private static final class Frame {
+    static final class Frame {
         final int w, h;
         final byte[] rgba;
 
