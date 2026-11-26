@@ -35,6 +35,7 @@ import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -273,6 +274,11 @@ public class MainActivity extends Activity {
             notifyDashboard("หยุดการทำงานและกลับสู่หน้าหลักแล้ว");
         });
         topBar.addView(btnHome);
+
+        // ปุ่มทดสอบทัช — ใช้เช็กว่าเส้นทาง dispatchTouchEvent ไปถึง WebView หรือไม่
+        Button btnTestTap = makeBarButton("👆 ทดสอบแตะ", "#2c6e8f");
+        btnTestTap.setOnClickListener(v -> testWebTap(-1, -1));
+        topBar.addView(btnTestTap);
 
         Button btnCloseNext = makeBarButton("ปิด / ถัดไป ⏭", "#a02828");
         btnCloseNext.setOnClickListener(v -> closeAndOpenNextAccount());
@@ -1037,6 +1043,28 @@ public class MainActivity extends Activity {
         });
     }
 
+    /** ทดสอบส่งทัชเข้า WebView (x,y < 0 = กึ่งกลาง) — ใช้ดีบักว่าบอทกดได้จริงไหม */
+    private void testWebTap(int x, int y) {
+        if (robloxWebView == null || browserContainer == null
+                || browserContainer.getVisibility() != View.VISIBLE) {
+            Toast.makeText(this, "เปิดแผง browser/game ก่อนครับ", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        int w = robloxWebView.getWidth(), h = robloxWebView.getHeight();
+        if (x < 0 || y < 0) {
+            x = w / 2;
+            y = h / 2;
+        }
+        if (w <= 0 || h <= 0 || x < 0 || y < 0 || x >= w || y >= h) {
+            Toast.makeText(this, "ขนาด WebView ไม่พร้อมครับ", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        webTouchProvider.down(x, y);
+        mainHandler.postDelayed(() -> webTouchProvider.up(x, y), 90);
+        Toast.makeText(this, "ส่งทัชทดสอบที่ (" + x + ", " + y + ")", Toast.LENGTH_SHORT).show();
+        notifyBot("👆 ทดสอบแตะที่ (" + x + ", " + y + ")", "#8ecbff", true);
+    }
+
     /** พยายามเชื่อมต่อ ADB อัตโนมัติตอนเปิดแอป (ไม่บล็อก UI thread) */
     private void autoConnectBot() {
         autoConnectBot(false);
@@ -1356,6 +1384,12 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public String botStatus() {
             return autoHoldBot.statusJson();
+        }
+
+        @JavascriptInterface
+        public String botTestTap(int x, int y) {
+            testWebTap(x, y);
+            return "{\"ok\":true}";
         }
 
         @JavascriptInterface

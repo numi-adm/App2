@@ -66,6 +66,8 @@ final class AutoHoldBot {
     private int sdk = 30;
     private String holdMode = "idle";
     private int pressX = 0, pressY = 0;
+    private double lastBestScore = 0.0;   // คะแนน-template สูงสุดล่าสุด (ไว้ดีบัก)
+    private long lastDiagEmit = 0L;
     private int frames = 0;
     private int captures = 0;
     private int presses = 0;      // จำนวนครั้งที่กดค้าง→ปล่อยสำเร็จในรอบนี้
@@ -164,6 +166,12 @@ final class AutoHoldBot {
                 return;
             }
             emit("🌐 ใช้โหมด WebView (กดในหน้าเว็บ — ไม่ต้อง ADB)", "#3498db", true);
+            Frame test = capture();
+            if (test == null) {
+                emit("⚠️ ยังจับภาพ WebView ไม่ได้ — เปิดแผง browser/game ให้มองเห็นก่อนครับ", "#e67e22", true);
+            } else {
+                emit("📷 WebView พร้อมสแกน " + test.w + "x" + test.h, "#27ae60", true);
+            }
         } else {
             String h = optString(cfg, "host", host);
             int p = optInt(cfg, "port", port);
@@ -209,6 +217,7 @@ final class AutoHoldBot {
             j.put("presses", presses);
             j.put("templates", templates.size());
             j.put("releaseTemplates", releaseTemplates.size());
+            j.put("bestScore", lastBestScore);
             j.put("last", lastText);
         } catch (Exception ignored) {
         }
@@ -455,7 +464,10 @@ final class AutoHoldBot {
             return new int[]{x, y, x, y};
         }
 
-        if (templates.isEmpty()) return null;
+        if (templates.isEmpty()) {
+            lastBestScore = 0.0;
+            return null;
+        }
         double thr = optDouble(cfg, "tmThreshold", 0.8);
         int step = clamp(optInt(cfg, "scanStep", 2), 1, 4);
         double best = 0.0;
@@ -465,18 +477,21 @@ final class AutoHoldBot {
             int[] out = new int[4];
             double score = NativeBridge.botMatchTemplate(img.rgba, img.w, img.h,
                     t.rgba, t.w, t.h, step, out);
-            if (score > best && score >= thr) {
+            if (score > best) {
                 best = score;
-                int bx = out[0] + ox, by = out[1] + oy;
-                int[] b = t.box;
-                if (b[2] > b[0] && b[3] > b[1]) {
-                    bestRect = new int[]{bx + b[0], by + b[1], bx + b[2], by + b[3]};
-                } else {
-                    int cx = bx + t.w / 2, cy = by + t.h / 2;
-                    bestRect = new int[]{cx, cy, cx, cy};
+                if (score >= thr) {
+                    int bx = out[0] + ox, by = out[1] + oy;
+                    int[] b = t.box;
+                    if (b[2] > b[0] && b[3] > b[1]) {
+                        bestRect = new int[]{bx + b[0], by + b[1], bx + b[2], by + b[3]};
+                    } else {
+                        int cx = bx + t.w / 2, cy = by + t.h / 2;
+                        bestRect = new int[]{cx, cy, cx, cy};
+                    }
                 }
             }
         }
+        lastBestScore = best;
         return bestRect;
     }
 
@@ -517,23 +532,36 @@ final class AutoHoldBot {
                 Frame img = capture();
                 if (img == null) {
                     fails++;
-                    if (fails == 1) emit("⚠️ ดึงภาพไม่ได้ — กำลังลองเชื่อมต่อใหม่...", "#e67e22", true);
+                    String hint = "webview".equals(controlMode)
+                            ? "เปิดแผง browser/game ให้มองเห็นอยู่ไหม?" : "จอ MuMu/ADB ยังเปิดอยู่ไหม?";
+                    if (fails == 1) emit("⚠️ ดึงภาพไม่ได้ — " + hint, "#e67e22", true);
                     else if (fails == 3) reconnect();
-                    else if (fails % 6 == 0) emit("⚠️ ยังดึงภาพไม่ได้ (" + fails + " ครั้ง) — จอ MuMu ยังเปิดอยู่ไหม?", "#c0392b", true);
+                    else if (fails % 6 == 0) emit("⚠️ ยังดึงภาพไม่ได้ (" + fails + " ครั้ง) — " + hint, "#c0392b", true);
                     sleep(fails < 3 ? 400 : 1000);
                     continue;
                 }
                 fails = 0;
                 int[] rect = findTarget(img);
                 if (rect == null) {
-                    emit("🔍 กำลังสแกน...", "#3498db", false);
+                    long now = System.currentTimeMillis();
+                    if (!"color".equals(optString(cfg, "mode", "template")) && now - lastDiagEmit > 2000) {
+                        double thr = optDouble(cfg, "tmThreshold", 0.8);
+                        emit("🔍 สแกน... คะแนนสูงสุด " + String.format(java.util.Locale.US, "%.2f", lastBestScore)
+                                + " / ต้องการ " + String.format(java.util.Locale.US, "%.2f", thr)
+                                + " (ต้นแบบ " + templates.size() + ")", "#3498db", true);
+                        lastDiagEmit = now;
+                    } else {
+                        emit("🔍 กำลังสแกน...", "#3498db", false);
+                    }
                     sleep(interval);
                     continue;
                 }
 
                 int x = pickX(rect), y = pickY(rect);
                 if (!pressTouch(x, y)) {
-                    emit("❌ กดนิ้วไม่สำเร็จ — ตรวจสอบ ADB/SDK", "#c0392b", true);
+                    String hint = "webview".equals(controlMode)
+                            ? "ตรวจสอบ WebView/การส่งทัชในแอป" : "ตรวจสอบ ADB/SDK";
+                    emit("❌ กดนิ้วไม่สำเร็จ — " + hint, "#c0392b", true);
                     sleep(800);
                     continue;
                 }

@@ -136,6 +136,7 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
     <div class="bot-grid">
       <button onclick="botStartUI()" style="background:#1d7a34">▶ START</button>
       <button class="danger" onclick="botStopUI()">⏹ STOP</button>
+      <button class="ghost" onclick="botTestTapUI()">👆 ทดสอบแตะกลาง WebView</button>
       <span id="botLog" class="note">ยังไม่เริ่มทำงาน</span>
     </div>
     <div class="bot-grid" style="border-top:1px solid #444;padding-top:8px">
@@ -679,6 +680,12 @@ async function botClear(release) {
   botStatusRefresh();
 }
 
+function botTestTapUI() {
+  if (!window.NativeApp.botTestTap) return toast('APK ยังเก่า — ต้อง build ใหม่ก่อนครับ');
+  window.NativeApp.botTestTap(-1, -1);
+  toast('ส่งทัชทดสอบแล้ว — ดูผลบนหน้าเว็บครับ');
+}
+
 async function botStartUI() {
   await api('/api/bot_start', {config: botCfg()});
   $('botLog').textContent = '▶ กำลังเริ่มบอท...';
@@ -700,6 +707,7 @@ async function botStatusRefresh() {
       + ' · ' + (s.controlMode === 'adb' ? 'ADB' : 'WebView')
       + ' · ' + (s.target || '-')
       + ' · กดแล้ว ' + (s.presses || 0) + ' ครั้ง'
+      + ' · คะแนน ' + (s.bestScore != null ? Number(s.bestScore).toFixed(2) : '-')
       + ' · ต้นแบบ ' + (s.templates || 0) + '/' + (s.releaseTemplates || 0);
     const pill = $('botRunPill');
     if (pill) {
