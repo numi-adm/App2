@@ -683,6 +683,11 @@ public class MainActivity extends Activity {
                 robloxWebView.loadUrl("https://www.roblox.com/login");
             }
             mainHandler.postDelayed(liveInspectorRunnable, 1500);
+            /* เปิดเซสชันเสร็จ → ให้บอทเริ่มเอง (รอโหลดหน้า 1.5 วิก่อนแคปภาพ) */
+            final int token = openToken;
+            mainHandler.postDelayed(() -> {
+                if (browserOpen && token == openToken) startBotFromSession();
+            }, 1500);
         };
 
         if (cleanSession) {
@@ -1304,6 +1309,22 @@ public class MainActivity extends Activity {
         autoHoldBot.setControlMode("webview");
         /* start() มีการแคปทดสอบ (รอ UI thread) — ห้ามเรียกบน UI thread ตรง ๆ ไม่งั้นจอค้าง */
         new Thread(() -> autoHoldBot.start(cfg), "bot-start").start();
+    }
+
+    /** เปิดเซสชันใหม่แล้วให้บอทเริ่มเอง (ใช้ค่าที่บันทึกไว้จากหน้า dashboard) */
+    private void startBotFromSession() {
+        if (autoHoldBot == null || autoHoldBot.isRunning()) return;
+        if (autoCheckMode) return;   // โหมดเช็กสถานะ/ดึง cookie ไม่ใช่เซสชันเกม
+        JSONObject cfg = botStorage.loadConfig();
+        if (!cfg.optBoolean("autoStartOnSession", true)) return;
+        try {
+            cfg.put("controlMode", "webview");
+        } catch (Exception ignored) {
+        }
+        autoHoldBot.setControlMode("webview");
+        autoHoldBot.note("🚀 เปิดเซสชันใหม่ — เริ่มบอทอัตโนมัติ", "#27ae60");
+        /* start() แคปภาพทดสอบ (รอ UI thread) → ต้องรันบนเธรดอื่น */
+        new Thread(() -> autoHoldBot.start(cfg), "bot-autostart").start();
     }
 
     private boolean botRunningInWebView() {

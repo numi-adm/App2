@@ -74,6 +74,7 @@ final class AutoHoldBot {
     private String tapMode = "template";
     private int tapCursor = 0;
     private int holdMs = 1200;
+    private boolean stopAfterCharge = true;   // ชาร์จเต็มแล้วปิดบอททันที (เปิดเซสชันใหม่จะเริ่มใหม่)
     private double lastBestScore = 0.0;   // คะแนน-template สูงสุดล่าสุด (ไว้ดีบัก)
     private double lastBestScale = 1.0;   // สเกลต้นแบบที่ให้คะแนนดีที่สุด
     private double stickyScale = 1.0;     // สเกลที่เคย-success → ลองก่อนเสมอ (ประหยัดเวลา)
@@ -242,6 +243,7 @@ final class AutoHoldBot {
         String mode = optString(cfg, "controlMode", controlMode);
         setControlMode(mode);
         reloadPoints(cfg);
+        stopAfterCharge = cfg.optBoolean("stopAfterCharge", true);
         stickyScale = 1.0;   // ต้นแบบชุดใหม่ → ให้สแกนหาสเกลตั้งแต่รอบแรก
         scanTicks = 0;
 
@@ -314,6 +316,8 @@ final class AutoHoldBot {
             j.put("bestScale", lastBestScale);
             j.put("bestTpl", lastBestTplW + "x" + lastBestTplH);
             j.put("releaseThreshold", optDouble(cfg, "releaseThreshold", 0.92));
+            j.put("stopAfterCharge", stopAfterCharge);
+            j.put("autoStartOnSession", cfg.optBoolean("autoStartOnSession", true));
             j.put("last", lastText);
         } catch (Exception ignored) {
         }
@@ -844,6 +848,16 @@ final class AutoHoldBot {
 
                 releaseTouch(x, y);
                 presses++;
+                /* ชาร์จเต็ม (หรือกดตามพิกัดครบตาม ms ที่กำหนด) → ปิดบอททันที
+                 * เวลาเปิดเซสชันใหม่ MainActivity จะเริ่มบอทให้เองอีกครั้ง */
+                boolean finished = "charged".equals(reason)
+                        || (useCoords && releaseTemplates.isEmpty() && "timeout".equals(reason));
+                if (finished && stopAfterCharge) {
+                    emit("✅ ชาร์จเต็ม — ปิดบอทอัตโนมัติ (เปิดเซสชันใหม่จะเริ่มให้เอง)", "#27ae60", true);
+                    stopFlag = true;
+                    running.set(false);
+                    break;
+                }
                 if (!running.get() || stopFlag) break;
                 if ("lost".equals(reason)) {
                     reconnect();

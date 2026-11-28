@@ -135,6 +135,10 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
       <span id="botPointsNote" class="note" style="width:100%;color:#8ecbff"></span>
       <div id="botPointsList" class="note mono" style="width:100%;color:#bbb"></div>
     </div>
+    <div class="bot-grid" style="width:100%">
+      <label class="note" style="margin:0;white-space:nowrap"><input type="checkbox" id="botAutoStart" checked title="เปิดเซสชันในแอปแล้วให้บอทเริ่มเองทันที"> 🚀 เปิดบอทตอนเปิดเซสชัน</label>
+      <label class="note" style="margin:0;white-space:nowrap"><input type="checkbox" id="botStopCharged" checked title="พอชาร์จเต็ม/ปล่อยนิ้วแล้วปิดบอททันที (เปิดเซสชันใหม่จะเริ่มให้เอง)"> ✅ ปิดบอทตอนชาร์จเต็ม</label>
+    </div>
     <div class="bot-grid">
       <button onclick="botCaptureUI()">📸 แคปจอ</button>
       <button class="ghost" onclick="botCropMode=!botCropMode;toast(botCropMode?'แตะ/ลากบนภาพเพื่อเลือกกรอบ':'ปิดโหมดตัดภาพ')">✂️ ตัดภาพ</button>
@@ -633,7 +637,9 @@ function botCfg() {
     tapMode: ($('botTapMode') && $('botTapMode').value) || 'template',
     tapPoints: botPoints.map(p => [Math.round(p[0]), Math.round(p[1])]),
     holdMs: Math.round(num('botHoldMs', 1200)),
-    multiScale: !$('botMulti') || $('botMulti').checked
+    multiScale: !$('botMulti') || $('botMulti').checked,
+    autoStartOnSession: !$('botAutoStart') || $('botAutoStart').checked,
+    stopAfterCharge: !$('botStopCharged') || $('botStopCharged').checked
   };
 }
 
@@ -950,6 +956,8 @@ async function botLoadCfgUI() {
   set('botTapMode', c.tapMode || 'template');
   set('botHoldMs', c.holdMs || 1200);
   if ($('botMulti')) $('botMulti').checked = c.multiScale !== false;
+  if ($('botAutoStart')) $('botAutoStart').checked = c.autoStartOnSession !== false;
+  if ($('botStopCharged')) $('botStopCharged').checked = c.stopAfterCharge !== false;
   botTapModeChange();
   renderBotPoints();
   if (Object.keys(c).length) toast('โหลดตั้งค่าแล้ว');
