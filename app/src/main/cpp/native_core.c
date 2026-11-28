@@ -1035,6 +1035,12 @@ char *core_classify_page(int idx, const char *url, const char *page_text,
     } else if (on_recovery) {
         status = "RECOVERY";
         note = "ติด Recovery — ต้องกู้บัญชี/ยืนยันตัวตน (อีเมล/รหัสกู้คืน) กดเองในหน้าต่าง";
+    } else if (ck_len > 100 && !on_login) {
+        /* มี .ROBLOSECURITY จริงแล้วและไม่ได้อยู่หน้าล็อกอิน → WORK ทันที
+         * แม้ DOM จะทิ้งคำว่า "Verify / Press and hold" ค้างอยู่หลังยืนยันเสร็จ
+         * (เดิม VERIFY ถูกเช็คก่อน → สถานะไม่เปลี่ยนทั้งที่ดึง cookie แล้ว ) */
+        status = "WORK";
+        note = "ยืนยันตัวตนเสร็จ — ดึงและบันทึก Cookie สำเร็จแล้ว";
     } else if (confirmed_home) {
         status = "WORK";
         note = "ยืนยันตัวตนเสร็จ — ดึงและบันทึก Cookie สำเร็จแล้ว";

@@ -48,8 +48,9 @@
   - ตัวตรวจอ่านข้อความจาก `<title>`, กล่อง dialog/modal/alert/notification, **shadow DOM** และ iframe (เดิมอ่านแค่ innerText ของ body)
   - เพิ่มคีย์เวิร์ดทั้งอังกฤษ/ไทย (`security notification`, `temporarily locked`, `credentials may have been compromised`, `detected suspicious activity`, `ถูกล็อกชั่วคราว`, ฯลฯ)
   - จับซ้ำอีกชั้นในฝั่ง Java (`looksLikeSecurityLock`) เผื่อ native classifier อ่านข้อความไม่ครบ
-  - ปุ่มดึง cookie จะ**ไม่เขียนทับ**สถานะ `LOCKED`/`BAN`/`VERIFY`/`RECOVERY`/`CAPTCHA`/`2FA` ที่มีอยู่เดิมด้วย `WORK` อีก
+  - ปุ่มดึง cookie จะ**ไม่เขียนทับ**สถานะ `LOCKED`/`BAN`/`RECOVERY`/`2FA` ที่มีอยู่เดิมด้วย `WORK` อีก (แต่ `VERIFY`/`CAPTCHA` จะเคลียร์เป็น `WORK` หลังกดดึงสำเร็จ — ดูบั๊คด้านล่าง)
 - **ปุ่ม `ดึง Cookie` กดครั้งเดียวจบ**: สแกนหน้าล่าสุด → บันทึก cookie → **ไปไอดีถัดไปในคิวให้อัตโนมัติ** (ไม่ต้องกด `ปิด / ถัดไป` เอง)
+  - **แก้บั๊ค "ดึงแล้วสถานะยังค้าง VERIFY / ขึ้นกำลังเตรียมเซสชันแต่ไม่ไปรหัสต่อไป"**: กดดึงเองจะเชื่อ cookie ที่ได้ → เปลี่ยน `VERIFY`/`CAPTCHA` เป็น `WORK` ทันที และไม่ให้ DOM ที่ทิ้งคำว่า Verify ค้างไว้ downgrade สถานะกลับ · classifier ใน C ให้ cookie จริง (>100 ตัว) ชนะข้อความ VERIFY ที่ค้างในหน้า · ไอดีถัดไปในคิวบังคับฉีด JS กรอกรหัส (มี fallback ใน inspector เผื่อ Roblox redirect แบบ SPA ที่ `onPageFinished` ไม่ส่ง URL `/login`)
   - **แก้บั๊ค "ดึงแล้วไม่ไปต่อ"**: เดิมถ้า CookieManager ยังอ่าน cookie ไม่ได้ (หน้าเว็บโหลดไม่ทัน / โดนรีเซ็ต) ปุ่มจะ `return` ทิ้งทำให้คิวค้าง — ตอนนี้ถึงหา cookie ไม่เจอก็ยังข้ามไปไอดีถัดไปถ้ามีคิว · delay เก่าถูกยกเลิกก่อน schedule ใหม่ (ไม่มีกรณี `advanceScheduled` ค้าง) · รอสแกน 180ms + ไปต่อ 250ms (เดิม 500+1200ms)
   - **ระบบลื่นขึ้น**: inspector ลดจาก 1.5 วิ → 2.2 วิ (ยังมี `onPageFinished` + ปุ่มดึงเรียกทันที) · ไม่ลบ WebStorage/cache ทุกครั้งที่สลับไอดี (ล้างแค่ cookie + history) · JS รีเฟรชตารางแบบ throttle 900ms (เดิม `notifyDashboard(null)` บังคับ `load()` ทุกครั้ง)
 - **`⬇ ดึง cookie (ที่เลือก)` ไล่ทุกไอดีอัตโนมัติ**: เปิดทีละไอดี (ใช้ cookie เดิมก่อน), ตรวจหน้า/บันทึก cookie, เจอ `WORK` / หน้า `Security Notification` / `BAN` แล้วไปตัวถัดไปเอง — ใช้เช็กว่าอีก 7 ไอดีที่เหลือติดล็อกเหมือนกันหรือไม่ (ถ้าติด 2FA/ยืนยันว่าเป็นมนุษย์ จะหยุดรอให้กดเอง)

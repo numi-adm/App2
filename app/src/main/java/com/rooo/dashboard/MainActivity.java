@@ -523,7 +523,17 @@ public class MainActivity extends Activity {
                 }
 
                 // 5. อยู่หน้าล็อกอิน หรือสถานะอื่นๆ
-                browserStatusBadge.setText("กำลังล็อกอิน / ตรวจสอบสถานะ...");
+                /* กันเคส "กำลังเตรียมเซสชัน..." ค้างแล้วไม่ไปรหัสต่อไป:
+                 * Roblox อาจ redirect เข้า /login แบบ SPA → onPageFinished ไม่ส่ง URL /login
+                 * เลยไม่เคยฉีด JS กรอกรหัส (buildLoginJs มี guard กันฉีดซ้ำอยู่แล้ว) */
+                if (autoFillPending && url != null && url.contains("/login") && activeAccountIdx >= 0) {
+                    autoFillPending = false;
+                    String js = NativeBridge.buildLoginJs(activeAccountIdx);
+                    if (js != null && !js.isEmpty()) robloxWebView.evaluateJavascript(js, null);
+                }
+                browserStatusBadge.setText(autoFillPending
+                        ? "กำลังเตรียมเซสชันและกรอกรหัส..."
+                        : "กำลังล็อกอิน / ตรวจสอบสถานะ...");
                 browserStatusBadge.setTextColor(Color.parseColor("#99ccff"));
             } catch (Exception ignored) {
             }
@@ -660,15 +670,16 @@ public class MainActivity extends Activity {
         mainHandler.removeCallbacks(liveInspectorRunnable);
 
         Runnable launch = () -> {
+            /* ค้าง autoFill ไว้แม้มี cookie เดิม: ถ้า cookie หมดอายุแล้ว /home จะ redirect
+             * ไป /login → onPageFinished/inspector จะฉีดรหัสให้แทน (ไม่ติดหน้าเตรียมเซสชัน) */
+            autoFillPending = autoFill && (idx >= 0);
             if (!autoCheckMode && cookie != null && cookie.length() > 100) {
                 CookieManager cm = CookieManager.getInstance();
                 cm.setCookie("https://www.roblox.com",
                         ".ROBLOSECURITY=" + cookie + "; Domain=.roblox.com; Path=/; Secure; HttpOnly");
                 cm.flush();
-                autoFillPending = false;
                 robloxWebView.loadUrl("https://www.roblox.com/home");
             } else {
-                autoFillPending = autoFill && (idx >= 0);
                 robloxWebView.loadUrl("https://www.roblox.com/login");
             }
             mainHandler.postDelayed(liveInspectorRunnable, 1500);
@@ -687,7 +698,21 @@ public class MainActivity extends Activity {
                 || "RECOVERY".equals(st) || "CAPTCHA".equals(st) || "2FA".equals(st);
     }
 
+    /* สถานะที่ยังต้องรอจริง ๆ แม้กดดึง cookie แล้ว
+     * VERIFY/CAPTCHA เป็นแค่ข้อความค้างใน DOM หลังกดยืนยันเสร็จ → เคลียร์ได้
+     * แต่ LOCKED/BAN/RECOVERY/2FA ต้องคงไว้ (ยังใช้งานไม่ได้จริง) */
+    private static boolean isHardBlock(String st) {
+        return "LOCKED".equals(st) || "BAN".equals(st)
+                || "RECOVERY".equals(st) || "2FA".equals(st);
+    }
+
     private int grabCookieInternal() {
+        return grabCookieInternal(false);
+    }
+
+    /** explicit=true มาจากปุ่ม "ดึง Cookie" โดยตรง — ถ้าได้ cookie จริงให้ขึ้น WORK ทันที
+     *  (เดิมรักษา VERIFY ไว้ตลอด ทั้งที่ผู้ใช้กดยืนยันในหน้าต่างเสร็จแล้ว ) */
+    private int grabCookieInternal(boolean explicit) {
         CookieManager cm = CookieManager.getInstance();
         cm.flush();
         String raw1 = cm.getCookie("https://www.roblox.com");
@@ -703,12 +728,28 @@ public class MainActivity extends Activity {
         if (savedIdx >= 0) {
             String st = lastStatus != null ? lastStatus : "";
             String note = "ดึงจากหน้าต่างในแอป";
-            if (isBlockingStatus(st)) {
+            if (isHardBlock(st) || isHardBlock(dbSt)) {
+                // ไอดีล็อก/แบน/ติด 2FA จริง — ห้ามทับด้วย WORK เด็ดขาด
+                st = isHardBlock(st) ? st : dbSt;
+                note = "คงสถานะเดิม " + st + " — ยังไม่ยืนยันว่าใช้งานได้";
+            } else if ("WORK".equals(dbSt) && isBlockingStatus(st)) {
+                // DB เพิ่งเซฟเป็น WORK (จากปุ่มดึง) — ข้อความ VERIFY ค้างใน DOM ห้าม downgrade กลับ
+                st = "WORK";
+                note = "ดึงและบันทึก Cookie สำเร็จแล้ว";
+            } else if (explicit && isBlockingStatus(st)) {
+                // กดดึงเอง + ได้ cookie จริง = ยืนยันตัวตนสำเร็จแล้ว
+                st = "WORK";
+                note = "ยืนยันตัวตนเสร็จ — ดึงและบันทึก Cookie สำเร็จแล้ว";
+            } else if (isBlockingStatus(st)) {
                 if (lastNote != null && lastNote.length() > 0) note = lastNote;
             } else if (isBlockingStatus(dbSt)) {
-                // หน้าเว็บยังไม่ได้ตรวจ หรือตรวจไม่ทัน — ห้ามทับสถานะล็อก/แบน/ยืนยันด้วย WORK
-                st = dbSt;
-                note = "คงสถานะเดิม " + dbSt + " — ยังไม่ยืนยันว่าใช้งานได้";
+                if (explicit) {
+                    st = "WORK";
+                    note = "ยืนยันตัวตนเสร็จ — ดึงและบันทึก Cookie สำเร็จแล้ว";
+                } else {
+                    st = dbSt;
+                    note = "คงสถานะเดิม " + dbSt + " — ยังไม่ยืนยันว่าใช้งานได้";
+                }
             } else {
                 st = "WORK";
                 note = "ดึงและบันทึก Cookie สำเร็จแล้ว";
@@ -736,7 +777,7 @@ public class MainActivity extends Activity {
         inspectCurrentRobloxPage();
         mainHandler.postDelayed(() -> {
             if (!browserOpen || activeAccountIdx != idx || token != openToken) return;
-            int got = grabCookieInternal();
+            int got = grabCookieInternal(true);   // กดเอง = เชื่อ cookie ที่ได้ → เคลียร์ VERIFY/CAPTCHA
             boolean ok = got > 0 && "WORK".equals(lastGrabStatus);
             browserStatusBadge.setText(got > 0
                     ? ("สถานะ: " + lastGrabStatus + (ok ? " — บันทึก Cookie แล้ว" : " — " + lastNote))
@@ -788,7 +829,9 @@ public class MainActivity extends Activity {
         if (!browserOpen) return;
         if (!accountQueue.isEmpty()) {
             int nextIdx = accountQueue.remove(0);
-            openAccountInWebView(nextIdx, currentCleanSession, currentAutoFill);
+            /* ไอดีต่อไปในคิวต้องพยายามกรอกรหัสเสมอ (แม้เปิดด้วยโหมดเปิดเองมาก่อน)
+             * ไม่งั้นจะติดหน้า "กำลังเตรียมเซสชัน..." โดยไม่ไปรหัสต่อไป */
+            openAccountInWebView(nextIdx, currentCleanSession, true);
         } else if (botRunningInWebView()) {
             /* บอท WebView ต้องใช้แผงนี้จับภาพ — ห้ามปิดแผงตอนคิวหมด ไม่งั้นบอทจะดึงภาพไม่ได้ */
             autoCheckMode = false;
@@ -1630,7 +1673,7 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public int grabLiveCookie() {
-            return grabCookieInternal();
+            return grabCookieInternal(true);   // เรียกจากแดชบอร์ด = ผู้ใช้กดดึงเอง → เคลียร์ VERIFY เช่นกัน
         }
 
         @JavascriptInterface
