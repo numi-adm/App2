@@ -75,6 +75,10 @@ final class AutoHoldBot {
     private int tapCursor = 0;
     private int holdMs = 1200;
     private double lastBestScore = 0.0;   // คะแนน-template สูงสุดล่าสุด (ไว้ดีบัก)
+    private double lastBestScale = 1.0;   // สเกลต้นแบบที่ให้คะแนนดีที่สุด
+    private double stickyScale = 1.0;     // สเกลที่เคย-success → ลองก่อนเสมอ (ประหยัดเวลา)
+    private long scanTicks = 0;           // นับรอบสแกน เพื่อสลับระหว่างสแกนสเกลเดียว/สแกนเต็ม
+    private int lastBestTplW = 0, lastBestTplH = 0;   // ขนาดต้นแบบที่ให้คะแนนดีที่สุด
     private long lastDiagEmit = 0L;
     private int frames = 0;
     private int captures = 0;
@@ -238,6 +242,8 @@ final class AutoHoldBot {
         String mode = optString(cfg, "controlMode", controlMode);
         setControlMode(mode);
         reloadPoints(cfg);
+        stickyScale = 1.0;   // ต้นแบบชุดใหม่ → ให้สแกนหาสเกลตั้งแต่รอบแรก
+        scanTicks = 0;
 
         if ("webview".equals(controlMode)) {
             if (captureProvider == null || touchProvider == null) {
@@ -305,6 +311,8 @@ final class AutoHoldBot {
             j.put("tapMode", tapMode);
             j.put("tapPoints", new JSONArray(tapPointsJson()));
             j.put("holdMs", holdMs);
+            j.put("bestScale", lastBestScale);
+            j.put("bestTpl", lastBestTplW + "x" + lastBestTplH);
             j.put("last", lastText);
         } catch (Exception ignored) {
         }
@@ -376,6 +384,8 @@ final class AutoHoldBot {
             String savedName = storage.save(rgba, tw, th, release, new int[]{0, 0, tw, th});
             if (savedName == null) return false;
             Tpl t = new Tpl(rgba, tw, th, new int[]{0, 0, tw, th}, savedName);
+            stickyScale = 1.0;
+            scanTicks = 0;
             if (release) releaseTemplates.add(t);
             else templates.add(t);
             emit("✂️ ตัดต้นแบบ" + (release ? "ปล่อย" : "กด") + " " + tw + "x" + th + " → " + savedName, "#27ae60", true);
@@ -393,6 +403,8 @@ final class AutoHoldBot {
         String savedName = storage.save(rgba, w, h, release);
         if (savedName == null) return false;
         Tpl t = new Tpl(rgba, w, h, new int[]{0, 0, w, h}, savedName);
+        stickyScale = 1.0;
+        scanTicks = 0;
         if (release) releaseTemplates.add(t);
         else templates.add(t);
         emit("📂 เพิ่มต้นแบบ" + (release ? "ปล่อย" : "กด") + "จากไฟล์ "
@@ -568,29 +580,83 @@ final class AutoHoldBot {
         }
         double thr = optDouble(cfg, "tmThreshold", 0.8);
         int step = clamp(optInt(cfg, "scanStep", 2), 1, 4);
+        /* ลองหลายสเกล — ต้นแบบที่แคปจากจอ/MuMu คนละขนาดกับภาพสดจะจับไม่ได้เลย
+         * (NCC ที่สเกลผิดมักได้ ~0.1–0.2 ทั้งที่ภาพดูตรงกัน) */
+        scanTicks++;
+        /* สแกนทุกสเกลเฉพาะรอบแรก + ทุก 10 รอบ (และตอน multi-scale ปิดให้สแกนแค่ 1.0)
+         * รอบอื่นใช้สเกลที่เคยสำเร็จ → ไม่ให้บอทช้าจากการสแกนหลายสเกลทุกเฟรม */
+        boolean multi = cfg.optBoolean("multiScale", true);
+        double[] scales;
+        if (!multi) {
+            scales = new double[]{1.0};
+        } else if (scanTicks <= 3 || (scanTicks % 10) == 0) {
+            scales = new double[]{1.0, 0.9, 1.1, 0.8, 1.25, 0.7, 1.4, 0.6, 1.6, 0.5, 2.0};
+        } else if (Math.abs(stickyScale - 1.0) > 0.01) {
+            scales = new double[]{stickyScale, 1.0};
+        } else {
+            scales = new double[]{1.0};
+        }
         double best = 0.0;
         int[] bestRect = null;
-        for (Tpl t : templates) {
-            if (t.w > img.w || t.h > img.h) continue;
-            int[] out = new int[4];
-            double score = NativeBridge.botMatchTemplate(img.rgba, img.w, img.h,
-                    t.rgba, t.w, t.h, step, out);
-            if (score > best) {
-                best = score;
-                if (score >= thr) {
+        double bestScale = 1.0;
+        int bestW = 0, bestH = 0;
+        for (double s : scales) {
+            for (Tpl t : templates) {
+                Tpl cur = scaleTpl(t, s);
+                if (cur.w > img.w || cur.h > img.h || cur.w < 8 || cur.h < 8) continue;
+                int[] out = new int[4];
+                double score = NativeBridge.botMatchTemplate(img.rgba, img.w, img.h,
+                        cur.rgba, cur.w, cur.h, step, out);
+                if (score > best) {
+                    best = score;
+                    bestScale = s;
+                    bestW = cur.w;
+                    bestH = cur.h;
                     int bx = out[0] + ox, by = out[1] + oy;
-                    int[] b = t.box;
+                    int[] b = cur.box;
                     if (b != null && b.length >= 4 && (b[2] > b[0] || b[3] > b[1])) {
                         bestRect = new int[]{bx + b[0], by + b[1], bx + b[2], by + b[3]};
                     } else {
-                        int cx = bx + t.w / 2, cy = by + t.h / 2;
+                        int cx = bx + cur.w / 2, cy = by + cur.h / 2;
                         bestRect = new int[]{cx, cy, cx, cy};
                     }
                 }
             }
+            if (best >= thr) {
+                stickyScale = bestScale;   // จำสเกลที่ใช้ได้ → รอบหน้าลองตัวนี้ก่อน
+                break;                     // เจอแล้ว ไม่ต้องเสียเวลาลองสเกลที่เหลือ
+            }
         }
         lastBestScore = best;
-        return bestRect;
+        lastBestScale = bestScale;
+        lastBestTplW = bestW;
+        lastBestTplH = bestH;
+        return best >= thr ? bestRect : null;
+    }
+
+    /** ย่อ/ขยายต้นแบบให้เข้ากับความละเอียดภาพที่กำลังสแกน */
+    private static Tpl scaleTpl(Tpl t, double s) {
+        if (Math.abs(s - 1.0) < 0.01) return t;
+        int nw = Math.max(4, (int) Math.round(t.w * s));
+        int nh = Math.max(4, (int) Math.round(t.h * s));
+        if (nw == t.w && nh == t.h) return t;
+        int[] argb = new int[t.w * t.h];
+        for (int i = 0; i < argb.length; i++) {
+            int rr = t.rgba[i * 4] & 0xFF;
+            int gg = t.rgba[i * 4 + 1] & 0xFF;
+            int bb = t.rgba[i * 4 + 2] & 0xFF;
+            argb[i] = 0xFF000000 | (rr << 16) | (gg << 8) | bb;
+        }
+        Bitmap bm = Bitmap.createBitmap(argb, t.w, t.h, Bitmap.Config.ARGB_8888);
+        Bitmap sc = Bitmap.createScaledBitmap(bm, nw, nh, true);
+        byte[] rgba = bitmapToRgba(sc);
+        bm.recycle();
+        if (sc != bm) sc.recycle();
+        int[] b = (t.box != null && t.box.length >= 4)
+                ? new int[]{(int) Math.round(t.box[0] * s), (int) Math.round(t.box[1] * s),
+                            (int) Math.round(t.box[2] * s), (int) Math.round(t.box[3] * s)}
+                : new int[]{0, 0, nw, nh};
+        return new Tpl(rgba, nw, nh, b, t.name);
     }
 
     /** คะแนนความเหมือนสูงสุดของต้นแบบปล่อย (0 = ไม่เจอ) — สแกนใน ROI เดียวกับฝั่งกด */
@@ -600,13 +666,24 @@ final class AutoHoldBot {
         int[] r = roiRect(frame);
         if (r != null) img = crop(frame, r[0], r[1], r[2] - r[0], r[3] - r[1]);
         int step = clamp(optInt(cfg, "scanStep", 2), 1, 4);
+        double thr = optDouble(cfg, "releaseThreshold", 0.92);
+        /* ต้นแบบปล่อยมาจากจอเดียวกับต้นแบบกด → ใช้สเกลที่เคยสำเร็จก่อน แล้วค่อย 1.0/0.8/1.25 */
+        double[] scales = !cfg.optBoolean("multiScale", true)
+                ? new double[]{1.0}
+                : (Math.abs(stickyScale - 1.0) > 0.01
+                    ? new double[]{stickyScale, 1.0, 0.9, 1.1, 0.8, 1.25}
+                    : new double[]{1.0, 0.9, 1.1, 0.8, 1.25});
         double best = 0.0;
-        for (Tpl t : releaseTemplates) {
-            if (t.w > img.w || t.h > img.h) continue;
-            int[] out = new int[4];
-            double score = NativeBridge.botMatchTemplate(img.rgba, img.w, img.h,
-                    t.rgba, t.w, t.h, step, out);
-            if (score > best) best = score;
+        for (double s : scales) {
+            for (Tpl t : releaseTemplates) {
+                Tpl cur = scaleTpl(t, s);
+                if (cur.w > img.w || cur.h > img.h || cur.w < 8 || cur.h < 8) continue;
+                int[] out = new int[4];
+                double score = NativeBridge.botMatchTemplate(img.rgba, img.w, img.h,
+                        cur.rgba, cur.w, cur.h, step, out);
+                if (score > best) best = score;
+            }
+            if (best >= thr) break;
         }
         return best;
     }
@@ -650,9 +727,15 @@ final class AutoHoldBot {
                     long now = System.currentTimeMillis();
                     if (!"color".equals(optString(cfg, "mode", "template")) && now - lastDiagEmit > 2000) {
                         double thr = optDouble(cfg, "tmThreshold", 0.8);
-                        emit("🔍 สแกน... คะแนนสูงสุด " + String.format(java.util.Locale.US, "%.2f", lastBestScore)
+                        emit("🔍 สแกน... คะแนน " + String.format(java.util.Locale.US, "%.2f", lastBestScore)
                                 + " / ต้องการ " + String.format(java.util.Locale.US, "%.2f", thr)
-                                + " (ต้นแบบ " + templates.size() + ")", "#3498db", true);
+                                + " (ต้นแบบ " + lastBestTplW + "x" + lastBestTplH
+                                + " @สเกล " + String.format(java.util.Locale.US, "%.2f", lastBestScale)
+                                + " / ภาพ " + img.w + "x" + img.h
+                                + " · ต้นแบบ " + templates.size() + ")"
+                                 + (lastBestScore < 0.4
+                                    ? " — ต่ำมาก: ต้นแบบคนละจอ/คนละสเกล? แนะนำแคปต้นแบบใหม่ในหน้าเกมนี้"
+                                    : ""), "#3498db", true);
                         lastDiagEmit = now;
                     } else {
                         emit("🔍 กำลังสแกน...", "#3498db", false);

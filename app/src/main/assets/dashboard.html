@@ -129,6 +129,7 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
       <button class="ghost" onclick="botAddPointUI()">＋ เพิ่มพิกัด</button>
       <button class="ghost" onclick="botClearPointsUI()">🗑 ล้างพิกัด</button>
       <input id="botHoldMs" type="number" value="1200" title="กดค้างกี่ ms (ตอนไม่มีต้นแบบปล่อย)" style="max-width:95px">
+      <label class="note" style="margin:0;white-space:nowrap"><input type="checkbox" id="botMulti" checked title="ลองหลายสเกลเมื่อต้นแบบคนละขนาดกับภาพ"> multi-scale</label>
       <span id="botPointsNote" class="note" style="width:100%;color:#8ecbff"></span>
       <div id="botPointsList" class="note mono" style="width:100%;color:#bbb"></div>
     </div>
@@ -610,7 +611,8 @@ function botCfg() {
     interval: 300, releaseThreshold: 0.92,
     tapMode: ($('botTapMode') && $('botTapMode').value) || 'template',
     tapPoints: botPoints.map(p => [Math.round(p[0]), Math.round(p[1])]),
-    holdMs: Math.round(num('botHoldMs', 1200))
+    holdMs: Math.round(num('botHoldMs', 1200)),
+    multiScale: !$('botMulti') || $('botMulti').checked
   };
 }
 
@@ -798,6 +800,8 @@ async function botStatusRefresh() {
       + ' · ' + (s.target || '-')
       + ' · กดแล้ว ' + (s.presses || 0) + ' ครั้ง'
       + ' · คะแนน ' + (s.bestScore != null ? Number(s.bestScore).toFixed(2) : '-')
+      + ' @สเกล ' + (s.bestScale != null ? Number(s.bestScale).toFixed(2) : '-')
+      + ' (' + (s.bestTpl || '-') + ')'
       + ' · ต้นแบบ ' + (s.templates || 0) + '/' + (s.releaseTemplates || 0);
     const pill = $('botRunPill');
     if (pill) {
@@ -922,6 +926,7 @@ async function botLoadCfgUI() {
   botPoints = normBotPoints(c.tapPoints);
   set('botTapMode', c.tapMode || 'template');
   set('botHoldMs', c.holdMs || 1200);
+  if ($('botMulti')) $('botMulti').checked = c.multiScale !== false;
   botTapModeChange();
   renderBotPoints();
   if (Object.keys(c).length) toast('โหลดตั้งค่าแล้ว');
