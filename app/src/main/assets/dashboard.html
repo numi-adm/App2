@@ -828,10 +828,14 @@ async function botTestTextUI() {
   const j = await api('/api/bot_test_text', {});
   if (!j.ok) return toast(j.error || 'อ่านข้อความไม่สำเร็จ');
   const t = (j.text || '').replace(/\s+/g, ' ').trim();
+  const d = (j.diag || '').replace(/\s+/g, ' ').trim();
+  const u = (j.url || '').replace(/\s+/g, ' ').trim();
   $('botLog').textContent = t
     ? '🔤 ที่อ่านได้: ' + t.slice(0, 300) + (t.length > 300 ? '…' : '')
-    : '🔤 อ่านได้ว่าง — ถ้าเป็นข้อความใน canvas ต้องใช้ OCR';
-  toast(t ? 'อ่านข้อความแล้ว — ดูในช่อง log' : 'อ่านได้ว่าง — ถ้าเป็นข้อความใน canvas ต้องใช้ OCR');
+    : '🔤 อ่านได้ว่าง' + (d ? ' — ' + d.slice(0, 220) : '')
+      + (u ? ' @' + u.slice(0, 80) : '');
+  toast(t ? 'อ่านข้อความแล้ว — ดูในช่อง log'
+          : 'อ่านได้ว่าง — ดู diag ในช่อง log (shadow/iframe/canvas)');
 }
 
 async function botStartUI() {
@@ -864,7 +868,8 @@ async function botStatusRefresh() {
       + ' (' + (s.bestTpl || '-') + ')'
       + ' · ปล่อย≥' + (s.releaseThreshold != null ? Number(s.releaseThreshold).toFixed(2) : '-')
       + ' · 👁' + (s.watchdog ? (s.watchdogSec || 2) + 's' : '-')
-      + (s.mode === 'text' ? ' · 🔤' + (s.textNeedle || '-') : '')
+      + (s.mode === 'text' ? ' · 🔤' + (s.textNeedle || '-')
+         + (s.textDiag ? ' · 🔍' + String(s.textDiag).replace(/\s+/g, ' ').slice(0, 90) : '') : '')
       + ' · ต้นแบบ ' + (s.templates || 0) + '/' + (s.releaseTemplates || 0);
     const pill = $('botRunPill');
     if (pill) {

@@ -142,6 +142,9 @@ public class MainActivity extends Activity {
 
     /* โหมด WebView: จับภาพและส่งทัชจาก robloxWebView โดยตรง (ไม่ต้อง ADB) */
     private volatile String lastWebCaptureError = "";
+    /* ดีบักโหมดข้อความ: บอกว่าอ่านจากหน้าไหน/ได้กี่ตัว/เจอ shadow หรือ iframe ข้ามโดเมน */
+    private volatile String lastTextDiag = "";
+    private volatile String lastTextUrl = "";
     private int pixelCopyFails = 0;
     private long pixelCopySkipUntil = 0L;
     private final AutoHoldBot.CaptureProvider webCaptureProvider = new AutoHoldBot.CaptureProvider() {
@@ -158,47 +161,95 @@ public class MainActivity extends Activity {
     /** อ่านข้อความที่แสดงอยู่ในหน้าเว็บ (DOM) — ใช้กับโหมดบอท "ข้อความ" */
     private final AutoHoldBot.TextProvider webTextProvider = () -> readWebViewText();
 
+    /* ต้อง hook attachShadow ก่อนหน้าเว็บสร้าง modal — ไม่เช่นนั้น shadow แบบ closed จะเก็บคืนไม่ได้ */
+    private void injectShadowHook(WebView w) {
+        if (w == null) return;
+        try {
+            w.evaluateJavascript(
+                    "(function(){try{if(window.__roooShadowHooked)return;"
+                            + "window.__roooShadowHooked=true;window.__roooClosedShadows=[];"
+                            + "var o=Element.prototype.attachShadow;"
+                            + "Element.prototype.attachShadow=function(i){var s=o.call(this,i);"
+                            + "if(i&&i.mode==='closed'&&s&&window.__roooClosedShadows.indexOf(s)<0)"
+                            + "window.__roooClosedShadows.push(s);return s;};}catch(e){}})()", null);
+        } catch (Exception ignored) {
+        }
+    }
+
     private String readWebViewText() {
+        if (robloxWebView == null) {
+            lastTextDiag = "ยังไม่มี WebView — เปิดแผง browser ก่อน";
+            return "";
+        }
         final String[] out = {""};
         final CountDownLatch latch = new CountDownLatch(1);
         runOnUiThread(() -> {
             try {
-                /* สำคัญ: evaluateJavascript จะ JSON-encode ผลลัพธ์อยู่แล้ว
-                 * ถ้า return เป็น string (JSON.stringify) จะถูก quote ซ้ำ → JSONObject parse ไม่ได้
-                 * เลย return object ตรง ๆ จะได้ {"t":"..."} ที่ parse ได้ทันที
-                 * walk() รวมข้อความใน body + iframe + shadow DOM (open shadowRoot) แบบ recursive */
+                injectShadowHook(robloxWebView);
+                /* evaluateJavascript จะ JSON-encode ผลลัพธ์อยู่แล้ว → return object ตรง ๆ
+                 * walk() รวม body + iframe + shadow DOM (open และ closed ที่ hook ไว้) */
                 robloxWebView.evaluateJavascript(
-                        "(function(){var out=[],seen=[];"
+                        "(function(){var out=[],seen=[],lastShadows=0,lastBlocked=0,lastErr='';"
+                                + "var closed=window.__roooClosedShadows||[];"
+                                + "function push(t){if(t&&String(t).length)out.push(String(t));}"
                                 + "function walk(root){try{"
                                 + "if(!root||seen.indexOf(root)>=0)return;seen.push(root);"
                                 + "var b=root.body||root.documentElement;"
-                                + "if(b)out.push(b.innerText||b.textContent||'');"
-                                + "else if(root.textContent)out.push(root.textContent);"
+                                + "if(b)push(b.innerText||b.textContent||'');"
+                                + "else push(root.textContent||'');"
                                 + "var all=root.querySelectorAll?root.querySelectorAll('*'):[];"
                                 + "for(var i=0;i<all.length;i++){var el=all[i];"
-                                + "if(el.shadowRoot)walk(el.shadowRoot);}"
+                                + "if(el.shadowRoot){lastShadows++;walk(el.shadowRoot);}}"
+                                + "for(var k=0;k<closed.length;k++){"
+                                + "if(closed[k]&&(!closed[k].host||closed[k].host.isConnected)"
+                                + "&&seen.indexOf(closed[k])<0){lastShadows++;walk(closed[k]);}}"
                                 + "var fs=root.querySelectorAll?root.querySelectorAll('iframe'):[];"
                                 + "for(var j=0;j<fs.length;j++){try{var d=fs[j].contentDocument;"
-                                + "if(d)walk(d);}catch(e){}}"
-                                + "}catch(e){}}"
-                                + "if(document.title)out.push(document.title);"
+                                + "if(d)walk(d);else lastBlocked++;}catch(e){lastBlocked++;}}"
+                                + "}catch(e){lastErr=String(e&&e.message||e);}}"
+                                + "if(document.title)push(document.title);"
                                 + "walk(document);"
-                                + "return {t:out.join(String.fromCharCode(10)).slice(0,20000)};})()",
+                                + "var b=document.body||document.documentElement;"
+                                + "return {t:out.join(String.fromCharCode(10)).slice(0,20000),"
+                                + "url:String(location&&location.href||''),"
+                                + "rs:document.readyState||'',"
+                                + "bodyLen:b?String(b.innerText||b.textContent||'').length:0,"
+                                + "shadows:lastShadows,blocked:lastBlocked,err:lastErr,"
+                                + "html:(document.documentElement&&document.documentElement.outerHTML||'').slice(0,300)};})()",
                         value -> {
                             try {
-                                out[0] = new JSONObject(value).optString("t", "");
-                            } catch (Exception ignored) {
+                                JSONObject j = new JSONObject(value);
+                                out[0] = j.optString("t", "");
+                                lastTextUrl = j.optString("url", "");
+                                lastTextDiag = "rs=" + j.optString("rs", "")
+                                        + " · body=" + j.optInt("bodyLen", 0)
+                                        + " · shadow=" + j.optInt("shadows", 0)
+                                        + " · iframeX=" + j.optInt("blocked", 0);
+                                String err = j.optString("err", "");
+                                if (!err.isEmpty()) lastTextDiag += " · err=" + err;
+                                if (out[0].isEmpty()) {
+                                    String html = j.optString("html", "");
+                                    if (!html.isEmpty()) lastTextDiag += " · html=" + html;
+                                }
+                            } catch (Exception e) {
+                                lastTextDiag = "parse error: " + e.getMessage()
+                                        + " · raw=" + (value == null ? "null" : value);
                             }
                             latch.countDown();
                         });
             } catch (Exception e) {
+                lastTextDiag = "evaluate error: " + e.getMessage();
                 latch.countDown();
             }
         });
         try {
-            if (!latch.await(900, TimeUnit.MILLISECONDS)) return "";
+            if (!latch.await(900, TimeUnit.MILLISECONDS)) {
+                lastTextDiag = "หมดเวลาอ่านข้อความจาก WebView";
+                return "";
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            lastTextDiag = "ขัดจังหวะตอนอ่านข้อความ";
             return "";
         }
         return out[0];
@@ -410,6 +461,12 @@ public class MainActivity extends Activity {
 
         robloxWebView.setWebChromeClient(new WebChromeClient());
         robloxWebView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                super.onPageStarted(view, url, favicon);
+                injectShadowHook(view);   // hook ก่อนหน้าเว็บสร้าง modal (shadow แบบ closed)
+            }
+
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 return false;
@@ -1780,7 +1837,15 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public String botStatus() {
-            return autoHoldBot.statusJson();
+            String s = autoHoldBot.statusJson();
+            try {
+                JSONObject j = new JSONObject(s);
+                j.put("textDiag", lastTextDiag == null ? "" : lastTextDiag);
+                j.put("textUrl", lastTextUrl == null ? "" : lastTextUrl);
+                return j.toString();
+            } catch (Exception e) {
+                return s;
+            }
         }
 
         @JavascriptInterface
@@ -1795,12 +1860,16 @@ public class MainActivity extends Activity {
             String t = readWebViewText();
             String s = t == null ? "" : t.replace("\r", " ").replace("\n", " ");
             if (s.length() > 400) s = s.substring(0, 400) + "…";
-            autoHoldBot.note("🔤 ข้อความที่อ่านได้จากหน้าเว็บ: " + (s.isEmpty() ? "(ว่าง — อาจเป็นข้อความใน canvas)" : s),
-                    "#8ecbff");
+            String d = lastTextDiag == null ? "" : lastTextDiag;
+            if (d.length() > 300) d = d.substring(0, 300) + "…";
+            autoHoldBot.note("🔤 อ่านได้: " + (s.isEmpty() ? "(ว่าง)" : s)
+                    + " | " + d + " | " + (lastTextUrl == null ? "" : lastTextUrl), "#8ecbff");
             try {
                 JSONObject j = new JSONObject();
                 j.put("ok", true);
                 j.put("text", t == null ? "" : t);
+                j.put("diag", lastTextDiag == null ? "" : lastTextDiag);
+                j.put("url", lastTextUrl == null ? "" : lastTextUrl);
                 return j.toString();
             } catch (Exception e) {
                 return "{\"ok\":false}";
