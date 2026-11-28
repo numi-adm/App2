@@ -119,6 +119,19 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
       <input id="botHuman" type="number" value="70" title="ความเนียน 0–100" style="max-width:75px">
       <input id="botMaxHold" type="number" value="60" title="กดค้างนานสุด (วินาที)" style="max-width:75px">
     </div>
+    <div class="bot-grid" style="width:100%">
+      <select id="botTapMode" style="max-width:190px" onchange="botTapModeChange()">
+        <option value="template">🎯 กดกลางต้นแบบ</option>
+        <option value="coords">📍 กดตามพิกัด</option>
+      </select>
+      <input id="botTapX" type="number" placeholder="x" style="max-width:75px">
+      <input id="botTapY" type="number" placeholder="y" style="max-width:75px">
+      <button class="ghost" onclick="botAddPointUI()">＋ เพิ่มพิกัด</button>
+      <button class="ghost" onclick="botClearPointsUI()">🗑 ล้างพิกัด</button>
+      <input id="botHoldMs" type="number" value="1200" title="กดค้างกี่ ms (ตอนไม่มีต้นแบบปล่อย)" style="max-width:95px">
+      <span id="botPointsNote" class="note" style="width:100%;color:#8ecbff"></span>
+      <div id="botPointsList" class="note mono" style="width:100%;color:#bbb"></div>
+    </div>
     <div class="bot-grid">
       <button onclick="botCaptureUI()">📸 แคปจอ</button>
       <button class="ghost" onclick="botCropMode=!botCropMode;toast(botCropMode?'แตะ/ลากบนภาพเพื่อเลือกกรอบ':'ปิดโหมดตัดภาพ')">✂️ ตัดภาพ</button>
@@ -567,6 +580,7 @@ window.onNativeCookieUpdate = function(msg) {
 /* ================= Auto-Hold Bot (พอร์ตจาก FFFFFF) ================= */
 let botCropMode = false;
 let botCropSel = null;
+let botPoints = [];
 
 function botCfg() {
   const roiRaw = ($('botRoi').value || '').trim();
@@ -593,7 +607,10 @@ function botCfg() {
     holdScanMin: 80, holdScanMax: 200,
     reactMin: 120, reactMax: 350,
     slowChance: 0.15, confirmN: 2,
-    interval: 300, releaseThreshold: 0.92
+    interval: 300, releaseThreshold: 0.92,
+    tapMode: ($('botTapMode') && $('botTapMode').value) || 'template',
+    tapPoints: botPoints.map(p => [Math.round(p[0]), Math.round(p[1])]),
+    holdMs: Math.round(num('botHoldMs', 1200))
   };
 }
 
@@ -606,6 +623,69 @@ function botOnModeChange(syncAuto) {
   if (syncAuto !== false && $('botAuto')) $('botAuto').checked = cm === 'adb';
   botStatusRefresh();
 }
+
+/* ---- พิกัดกดที่กำหนดเอง ---- */
+function normBotPoints(a) {
+  if (!Array.isArray(a)) return [];
+  return a.map(p => Array.isArray(p) ? [p[0], p[1]] : [p && p.x, p && p.y])
+          .filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1]))
+          .map(p => [Math.round(p[0]), Math.round(p[1])]);
+}
+
+function botTapModeChange() {
+  const n = $('botPointsNote');
+  if (!n) return;
+  const cm = ($('botTapMode') && $('botTapMode').value) || 'template';
+  n.textContent = cm === 'coords'
+    ? 'โหมดพิกัด: template ใช้แค่บอกว่าถึงเวลากด → กดที่พิกัดด้านล่างตามลำดับ (วนรอบ) · กดค้างตาม ms ที่ใส่'
+    : 'กดกลางกรอบ template (มีโซนปลอดภัย ไม่โดนขอบปุ่ม)';
+}
+
+function renderBotPoints() {
+  const el = $('botPointsList');
+  if (!el) return;
+  if (!botPoints.length) {
+    el.textContent = '(ยังไม่มีพิกัด — กด 📍 จับพิกัด(WebV) บนแผง browser แล้วแตะจอ หรือใส่ x/y ตรงนี้สำหรับ ADB)';
+    return;
+  }
+  el.innerHTML = botPoints.map((p, i) =>
+    `<span style="display:inline-block;margin:2px 6px 2px 0;padding:2px 6px;background:#333;border-radius:6px">#${i + 1} (${p[0]},${p[1]}) <a href="javascript:void(0)" onclick="botDelPointUI(${i})" style="color:#ff7675">✕</a></span>`
+  ).join('');
+}
+
+async function botAddPointUI() {
+  const x = parseFloat(($('botTapX') || {}).value);
+  const y = parseFloat(($('botTapY') || {}).value);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return toast('ใส่ x/y ให้ครบก่อนครับ');
+  botPoints.push([Math.round(x), Math.round(y)]);
+  if ($('botTapMode')) $('botTapMode').value = 'coords';
+  botTapModeChange();
+  renderBotPoints();
+  const j = await api('/api/bot_save_config', {config: botCfg()});
+  toast(j.ok ? 'เพิ่มพิกัดแล้ว' : 'เพิ่มพิกัดไม่สำเร็จ');
+}
+
+async function botDelPointUI(i) {
+  botPoints.splice(i, 1);
+  renderBotPoints();
+  await api('/api/bot_save_config', {config: botCfg()});
+}
+
+async function botClearPointsUI() {
+  botPoints = [];
+  if ($('botTapMode')) $('botTapMode').value = 'template';
+  botTapModeChange();
+  renderBotPoints();
+  await api('/api/bot_save_config', {config: botCfg()});
+}
+
+/* เรียกจากแอปเมื่อเพิ่มพิกัดผ่านปุ่มบนแผง browser */
+window.onBotPointsUpdate = function (arr) {
+  botPoints = normBotPoints(arr);
+  if (botPoints.length && $('botTapMode')) $('botTapMode').value = 'coords';
+  botTapModeChange();
+  renderBotPoints();
+};
 
 async function botConnectUI() {
   if ($('botControl')) $('botControl').value = 'adb';
@@ -839,6 +919,11 @@ async function botLoadCfgUI() {
   set('botRoi', Array.isArray(c.roi) ? c.roi.join(',') : '');
   if (typeof c.humanize === 'number') set('botHuman', Math.round(c.humanize * 100));
   set('botMaxHold', c.maxHold);
+  botPoints = normBotPoints(c.tapPoints);
+  set('botTapMode', c.tapMode || 'template');
+  set('botHoldMs', c.holdMs || 1200);
+  botTapModeChange();
+  renderBotPoints();
   if (Object.keys(c).length) toast('โหลดตั้งค่าแล้ว');
 }
 
@@ -949,6 +1034,8 @@ setTimeout(() => {
   img.addEventListener('pointercancel', endPointer);
 })();
 
+botTapModeChange();
+renderBotPoints();
 load();
 </script>
 </body>

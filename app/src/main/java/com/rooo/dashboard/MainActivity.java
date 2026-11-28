@@ -110,6 +110,7 @@ public class MainActivity extends Activity {
     private TextView browserTitle;
     private TextView browserStatusBadge;
     private TextView botBadge;   // แสดง log บอทบนแถบ browser (ไม่รบกวนการจับภาพ WebView)
+    private boolean tapPointArmed = false;   // กำลังรอผู้ใช้แตะจอเพื่อจับพิกัดกด
 
     private ValueCallback<Uri[]> fileUploadCallback;
     private String pendingCsvExport = "";
@@ -316,7 +317,37 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        /* แถวพิกัดกด — แตะปุ่มแล้วแตะบนหน้าเกมเพื่อบันทึกจุดที่อยากให้บอทกด */
+        LinearLayout tapRow = new LinearLayout(this);
+        tapRow.setOrientation(LinearLayout.HORIZONTAL);
+        tapRow.setBackgroundColor(Color.parseColor("#202a33"));
+        Button btnArmTap = makeBarButton("📍 จับพิกัด(WebV)", "#1d6a4a");
+        btnArmTap.setOnClickListener(v -> {
+            tapPointArmed = true;
+            Toast.makeText(this, "แตะบนหน้าเกม 1 ครั้งเพื่อบันทึกพิกัด (โหมด WebView)", Toast.LENGTH_SHORT).show();
+            if (autoHoldBot != null) {
+                autoHoldBot.note("📍 พร้อมจับพิกัด — แตะบนหน้าเกม 1 ครั้ง", "#8ecbff");
+            }
+        });
+        tapRow.addView(btnArmTap, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        Button btnClearPoints = makeBarButton("🗑 ล้างพิกัด", "#5a3030");
+        btnClearPoints.setOnClickListener(v -> clearTapPointsFromBar());
+        tapRow.addView(btnClearPoints, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        browserContainer.addView(tapRow, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+
         robloxWebView = new WebView(this);
+        /* ดักแตะจอเพื่อจับพิกัด — return false ไม่ไปขัดการทำงานปกติของ WebView */
+        robloxWebView.setOnTouchListener((v, event) -> {
+            if (tapPointArmed && event.getAction() == MotionEvent.ACTION_DOWN) {
+                tapPointArmed = false;
+                addTapPointFromBar(Math.round(event.getX()), Math.round(event.getY()));
+            }
+            return false;
+        });
         WebSettings rs = robloxWebView.getSettings();
         rs.setJavaScriptEnabled(true);
         rs.setDomStorageEnabled(true);
@@ -1211,6 +1242,52 @@ public class MainActivity extends Activity {
     private boolean botRunningInWebView() {
         return autoHoldBot != null && autoHoldBot.isRunning()
                 && "webview".equals(autoHoldBot.controlMode());
+    }
+
+    /** บันทึกพิกัดที่ผู้ใช้แตะบนหน้าเกม แล้วเปิดโหมด "กดตามพิกัด" ทันที */
+    private void addTapPointFromBar(int x, int y) {
+        try {
+            JSONObject cfg = botStorage.loadConfig();
+            JSONArray arr = cfg.optJSONArray("tapPoints");
+            if (arr == null) arr = new JSONArray();
+            JSONArray p = new JSONArray();
+            p.put(x);
+            p.put(y);
+            arr.put(p);
+            cfg.put("tapPoints", arr);
+            cfg.put("tapMode", "coords");
+            botStorage.saveConfig(cfg);
+            autoHoldBot.reloadPoints(cfg);
+            autoHoldBot.note("📍 บันทึกพิกัดกด (" + x + ", " + y + ") — รวม " + arr.length() + " จุด", "#27ae60");
+            syncBotPointsToDashboard();
+        } catch (Exception e) {
+            if (autoHoldBot != null) {
+                autoHoldBot.note("❌ บันทึกพิกัดไม่ได้: " + e.getMessage(), "#c0392b");
+            }
+        }
+    }
+
+    private void clearTapPointsFromBar() {
+        try {
+            JSONObject cfg = botStorage.loadConfig();
+            cfg.put("tapPoints", new JSONArray());
+            cfg.put("tapMode", "template");
+            botStorage.saveConfig(cfg);
+            autoHoldBot.reloadPoints(cfg);
+            autoHoldBot.note("🗑 ล้างพิกัดกดแล้ว — กลับไปกดกลางต้นแบบ", "#e67e22");
+            syncBotPointsToDashboard();
+        } catch (Exception e) {
+            if (autoHoldBot != null) {
+                autoHoldBot.note("❌ ล้างพิกัดไม่ได้: " + e.getMessage(), "#c0392b");
+            }
+        }
+    }
+
+    private void syncBotPointsToDashboard() {
+        if (autoHoldBot == null) return;
+        runOnUiThread(() -> dashWebView.evaluateJavascript(
+                "if(window.onBotPointsUpdate) window.onBotPointsUpdate("
+                        + autoHoldBot.tapPointsJson() + ");", null));
     }
 
     /** ทดสอบส่งทัชเข้า WebView (x,y < 0 = กึ่งกลาง) — ใช้ดีบักว่าบอทกดได้จริงไหม */

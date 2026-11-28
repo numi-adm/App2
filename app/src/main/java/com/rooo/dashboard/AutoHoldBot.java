@@ -69,6 +69,11 @@ final class AutoHoldBot {
     private String holdMode = "idle";
     private int pressX = 0, pressY = 0;
     private int[] targetRect = null;
+    /* พิกัดกดที่ผู้ใช้กำหนดเอง (โหมด "coords") — ใช้แทนจุดกลางกรอบ template */
+    private final List<int[]> tapPoints = new ArrayList<>();
+    private String tapMode = "template";
+    private int tapCursor = 0;
+    private int holdMs = 1200;
     private double lastBestScore = 0.0;   // คะแนน-template สูงสุดล่าสุด (ไว้ดีบัก)
     private long lastDiagEmit = 0L;
     private int frames = 0;
@@ -116,6 +121,70 @@ final class AutoHoldBot {
     /** เขียนข้อความลง log ของบอท (ให้ฝั่งแอปรายงานเหตุ เช่น แคปภาพไม่สำเร็จ) */
     void note(String text, String color) {
         emit(text, color, true);
+    }
+
+    // ------------------------------------------------------------------
+    // พิกัดกดที่กำหนดเอง (กดตำแหน่งที่ผู้ใช้แตะ แทนกลางต้นแบบ)
+    // ------------------------------------------------------------------
+    /** โหลด/โหลดใหม่จาก config — เรียกได้แม้บอทกำลังรัน */
+    void reloadPoints(JSONObject cfg) {
+        if (cfg == null) return;
+        tapMode = "coords".equals(optString(cfg, "tapMode", tapMode)) ? "coords" : "template";
+        holdMs = clamp(optInt(cfg, "holdMs", holdMs), 50, 60000);
+        synchronized (tapPoints) {
+            tapPoints.clear();
+            JSONArray arr = cfg.optJSONArray("tapPoints");
+            if (arr != null) {
+                for (int i = 0; i < arr.length(); i++) {
+                    int[] p = parsePoint(arr.opt(i));
+                    if (p != null) tapPoints.add(p);
+                }
+            }
+            tapCursor = 0;
+        }
+    }
+
+    private static int[] parsePoint(Object o) {
+        try {
+            if (o instanceof JSONArray) {
+                JSONArray a = (JSONArray) o;
+                if (a.length() >= 2) return new int[]{a.getInt(0), a.getInt(1)};
+            } else if (o instanceof JSONObject) {
+                JSONObject j = (JSONObject) o;
+                return new int[]{j.getInt("x"), j.getInt("y")};
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    /** เพิ่ม 1 จุดพิกัด (เรียกจากปุ่มบนแผง browser หลังผู้ใช้แตะจอ) */
+    void addTapPoint(int x, int y) {
+        synchronized (tapPoints) {
+            tapPoints.add(new int[]{x, y});
+            tapMode = "coords";
+        }
+        emit("📍 เพิ่มพิกัดกด (" + x + ", " + y + ") — ใช้โหมดกดตามพิกัดแล้ว", "#27ae60", true);
+    }
+
+    /** รายการพิกัดเป็น JSON [[x,y], ...] */
+    String tapPointsJson() {
+        JSONArray arr = new JSONArray();
+        synchronized (tapPoints) {
+            for (int[] p : tapPoints) {
+                JSONArray q = new JSONArray();
+                q.put(p[0]);
+                q.put(p[1]);
+                arr.put(q);
+            }
+        }
+        return arr.toString();
+    }
+
+    boolean hasTapPoints() {
+        synchronized (tapPoints) {
+            return !tapPoints.isEmpty();
+        }
     }
 
     // ------------------------------------------------------------------
@@ -168,6 +237,7 @@ final class AutoHoldBot {
         cfg = config != null ? config : new JSONObject();
         String mode = optString(cfg, "controlMode", controlMode);
         setControlMode(mode);
+        reloadPoints(cfg);
 
         if ("webview".equals(controlMode)) {
             if (captureProvider == null || touchProvider == null) {
@@ -232,6 +302,9 @@ final class AutoHoldBot {
             j.put("bestScore", lastBestScore);
             j.put("captureError", "webview".equals(controlMode) && captureProvider != null
                     ? captureProvider.lastError() : "");
+            j.put("tapMode", tapMode);
+            j.put("tapPoints", new JSONArray(tapPointsJson()));
+            j.put("holdMs", holdMs);
             j.put("last", lastText);
         } catch (Exception ignored) {
         }
@@ -395,6 +468,7 @@ final class AutoHoldBot {
         try {
             JSONObject cfgObj = new JSONObject(json);
             storage.saveConfig(cfgObj);
+            reloadPoints(cfgObj);
             emit("💾 บันทึกตั้งค่าไปยังโฟลเดอร์บอทแล้ว", "#27ae60", true);
             return true;
         } catch (Exception e) {
@@ -587,15 +661,32 @@ final class AutoHoldBot {
                     continue;
                 }
 
-                int x = pickX(rect), y = pickY(rect);
-                if (!pressTouch(x, y, rect)) {
+                int x, y;
+                int[] pressRect = rect;
+                boolean useCoords = "coords".equals(tapMode) && hasTapPoints();
+                if (useCoords) {
+                    int[] p;
+                    synchronized (tapPoints) {
+                        p = tapPoints.get(tapCursor % tapPoints.size());
+                        tapCursor++;
+                    }
+                    x = p[0];
+                    y = p[1];
+                    pressRect = new int[]{x, y, x, y};  // กัน jitter ดึงนิ้วออกจากพิกัดที่กำหนด
+                } else {
+                    x = pickX(rect);
+                    y = pickY(rect);
+                }
+                if (!pressTouch(x, y, pressRect)) {
                     String hint = "webview".equals(controlMode)
                             ? "ตรวจสอบ WebView/การส่งทัชในแอป" : "ตรวจสอบ ADB/SDK";
                     emit("❌ กดนิ้วไม่สำเร็จ — " + hint, "#c0392b", true);
                     sleep(800);
                     continue;
                 }
-                emit("🎯 กดที่ (" + x + ", " + y + ") โหมด: " + holdMode + " — กำลังชาร์จ...", "#2ecc71", false);
+                emit("🎯 กดที่ (" + x + ", " + y + ") "
+                        + (useCoords ? "[พิกัดที่กำหนด]" : "[กลางต้นแบบ]")
+                        + " โหมด: " + holdMode + " — กำลังชาร์จ...", "#2ecc71", false);
 
                 String reason = "stop";
                 long t0 = System.currentTimeMillis();
@@ -608,6 +699,16 @@ final class AutoHoldBot {
                     if (maxHold > 0 && elapsed > maxHold) {
                         reason = "timeout";
                         break;
+                    }
+                    if (useCoords && releaseTemplates.isEmpty()) {
+                        /* โหมดพิกัด: จุดกดไม่ได้อยู่บนต้นแบบ → ใช้เวลากดค้างแทนเช็คภาพหาย */
+                        if ((System.currentTimeMillis() - t0) >= holdMs) {
+                            reason = "timeout";
+                            break;
+                        }
+                        emit("🔋 ค้างนิ้ว " + String.format(java.util.Locale.US, "%.1f", elapsed)
+                                + " / " + (holdMs / 1000.0) + " วิ", "#2ecc71", false);
+                        continue;
                     }
                     Frame check = capture();
                     if (check == null) {
@@ -646,7 +747,11 @@ final class AutoHoldBot {
                     emit("⚡ ชาร์จเต็ม! รอ reaction " + rd + " ms ก่อนปล่อย...", "#e67e22", false);
                     sleep(rd);
                 } else if ("timeout".equals(reason)) {
-                    emit("⌛ กดครบ " + (int) maxHold + " วิ ยังไม่เจอภาพชาร์จเต็ม — ปล่อยเพื่อความปลอดภัย", "#e67e22", false);
+                    if (useCoords && releaseTemplates.isEmpty()) {
+                        emit("⏱ ค้างนิ้วครบ " + (holdMs / 1000.0) + " วิ — ปล่อยนิ้ว", "#e67e22", false);
+                    } else {
+                        emit("⌛ กดครบ " + (int) maxHold + " วิ ยังไม่เจอภาพชาร์จเต็ม — ปล่อยเพื่อความปลอดภัย", "#e67e22", false);
+                    }
                 } else if ("lost".equals(reason)) {
                     emit("⚠️ ภาพหลุดระหว่างกดค้าง — ปล่อยนิ้วเพื่อความปลอดภัย", "#c0392b", true);
                 }
