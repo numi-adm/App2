@@ -165,16 +165,25 @@ public class MainActivity extends Activity {
             try {
                 /* สำคัญ: evaluateJavascript จะ JSON-encode ผลลัพธ์อยู่แล้ว
                  * ถ้า return เป็น string (JSON.stringify) จะถูก quote ซ้ำ → JSONObject parse ไม่ได้
-                 * เลย return object ตรง ๆ จะได้ {"t":"..."} ที่ parse ได้ทันที */
+                 * เลย return object ตรง ๆ จะได้ {"t":"..."} ที่ parse ได้ทันที
+                 * walk() รวมข้อความใน body + iframe + shadow DOM (open shadowRoot) แบบ recursive */
                 robloxWebView.evaluateJavascript(
-                        "(function(){try{var p=[];"
-                                + "if(document.title)p.push(document.title);"
-                                + "var b=document.body||document.documentElement;"
-                                + "if(b)p.push(b.innerText||b.textContent||'');"
-                                + "var fs=document.querySelectorAll('iframe');"
-                                + "for(var i=0;i<fs.length;i++){try{var d=fs[i].contentDocument;"
-                                + "if(d&&d.body)p.push(d.body.innerText||d.body.textContent||'');}catch(e){}}"
-                                + "return {t:p.join('\\n')};}catch(e){return {t:''};}})()",
+                        "(function(){var out=[],seen=[];"
+                                + "function walk(root){try{"
+                                + "if(!root||seen.indexOf(root)>=0)return;seen.push(root);"
+                                + "var b=root.body||root.documentElement;"
+                                + "if(b)out.push(b.innerText||b.textContent||'');"
+                                + "else if(root.textContent)out.push(root.textContent);"
+                                + "var all=root.querySelectorAll?root.querySelectorAll('*'):[];"
+                                + "for(var i=0;i<all.length;i++){var el=all[i];"
+                                + "if(el.shadowRoot)walk(el.shadowRoot);}"
+                                + "var fs=root.querySelectorAll?root.querySelectorAll('iframe'):[];"
+                                + "for(var j=0;j<fs.length;j++){try{var d=fs[j].contentDocument;"
+                                + "if(d)walk(d);}catch(e){}}"
+                                + "}catch(e){}}"
+                                + "if(document.title)out.push(document.title);"
+                                + "walk(document);"
+                                + "return {t:out.join(String.fromCharCode(10)).slice(0,20000)};})()",
                         value -> {
                             try {
                                 out[0] = new JSONObject(value).optString("t", "");
