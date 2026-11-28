@@ -1077,6 +1077,7 @@ public class MainActivity extends Activity {
             autoHoldBot.stop();
             notifyBot("⏹ ปิดแผง browser — หยุดบอทให้อัตโนมัติ", "#7f8c8d", true);
         }
+        if (autoHoldBot != null) autoHoldBot.stopWatchdog();
         grabCookieInternal();
         accountQueue.clear();
         browserOpen = false;
@@ -1299,6 +1300,7 @@ public class MainActivity extends Activity {
         if (autoHoldBot == null) return;
         if (autoHoldBot.isRunning()) {
             autoHoldBot.stop();
+            autoHoldBot.startWatchdog(botStorage.loadConfig());
             return;
         }
         JSONObject cfg = botStorage.loadConfig();
@@ -1316,6 +1318,8 @@ public class MainActivity extends Activity {
         if (autoHoldBot == null || autoHoldBot.isRunning()) return;
         if (autoCheckMode) return;   // โหมดเช็กสถานะ/ดึง cookie ไม่ใช่เซสชันเกม
         JSONObject cfg = botStorage.loadConfig();
+        /* เผื่อบอทปิดอยู่ — watchdog จะดึงภาพตรวจทุก 2 วิ แล้วเปิดเมื่อเจอต้นแบบ */
+        autoHoldBot.startWatchdog(cfg);
         if (!cfg.optBoolean("autoStartOnSession", true)) return;
         try {
             cfg.put("controlMode", "webview");

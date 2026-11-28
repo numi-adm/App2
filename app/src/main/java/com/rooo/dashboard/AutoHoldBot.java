@@ -75,6 +75,13 @@ final class AutoHoldBot {
     private int tapCursor = 0;
     private int holdMs = 1200;
     private boolean stopAfterCharge = true;   // ชาร์จเต็มแล้วปิดบอททันที (เปิดเซสชันใหม่จะเริ่มใหม่)
+    /* Watchdog: ตอนบอทปิดอยู่ให้ดึงภาพตรวจทุก ๆ 2 วิ ถ้าเจอต้นแบบอีกครั้งให้เปิดบอทเอง */
+    private boolean watchdogEnabled = true;
+    private int watchdogSec = 2;
+    private final AtomicBoolean watchdogOn = new AtomicBoolean(false);
+    private Thread watchdogThread;
+    private JSONObject watchdogCfg;
+
     private double lastBestScore = 0.0;   // คะแนน-template สูงสุดล่าสุด (ไว้ดีบัก)
     private double lastBestScale = 1.0;   // สเกลต้นแบบที่ให้คะแนนดีที่สุด
     private double stickyScale = 1.0;     // สเกลที่เคย-success → ลองก่อนเสมอ (ประหยัดเวลา)
@@ -239,6 +246,7 @@ final class AutoHoldBot {
     // ------------------------------------------------------------------
     void start(JSONObject config) {
         if (running.get()) return;
+        stopWatchdog();   // เปิดบอทแล้วไม่ต้องให้ watchdog แย่งดึงภาพ
         cfg = config != null ? config : new JSONObject();
         String mode = optString(cfg, "controlMode", controlMode);
         setControlMode(mode);
@@ -289,6 +297,48 @@ final class AutoHoldBot {
         releaseTouch(pressX, pressY);
     }
 
+    // ------------------------------------------------------------------
+    // Watchdog: ตอนปิดอยู่ให้คอยดึงภาพตรวจหาต้นแบบ แล้วเปิดบอทเองเมื่อเจอ
+    // ------------------------------------------------------------------
+    void startWatchdog(JSONObject config) {
+        watchdogCfg = config != null ? config : (cfg != null ? cfg : new JSONObject());
+        watchdogEnabled = watchdogCfg.optBoolean("watchdogEnabled", true);
+        watchdogSec = clamp(watchdogCfg.optInt("watchdogSec", 2), 1, 60);
+        if (!watchdogEnabled || running.get() || watchdogOn.get()) return;
+        watchdogOn.set(true);
+        watchdogThread = new Thread(this::watchdogLoop, "bot-watchdog");
+        watchdogThread.setDaemon(true);
+        watchdogThread.start();
+    }
+
+    void stopWatchdog() {
+        watchdogOn.set(false);
+    }
+
+    private void watchdogLoop() {
+        long period = Math.max(1000L, watchdogSec * 1000L);
+        while (watchdogOn.get() && !running.get()) {
+            try {
+                Thread.sleep(period);
+            } catch (InterruptedException e) {
+                break;
+            }
+            if (!watchdogOn.get() || running.get()) continue;
+            JSONObject c = watchdogCfg != null ? watchdogCfg : cfg;
+            if (c == null) continue;
+            cfg = c;                                   // findTarget() ใช้ threshold/ROI จาก cfg
+            setControlMode(optString(c, "controlMode", controlMode));
+            if ("webview".equals(controlMode) && captureProvider == null) continue;
+            Frame f = capture();
+            if (f == null) continue;
+            if (findTarget(f) != null) {
+                emit("🔔 เจอภาพต้นแบบขณะปิดอยู่ — เปิดบอทอัตโนมัติ", "#27ae60", true);
+                start(c);
+                break;                                 // start() หยุด watchdog อยู่แล้ว
+            }
+        }
+    }
+
     boolean isRunning() {
         return running.get();
     }
@@ -318,6 +368,8 @@ final class AutoHoldBot {
             j.put("releaseThreshold", optDouble(cfg, "releaseThreshold", 0.92));
             j.put("stopAfterCharge", stopAfterCharge);
             j.put("autoStartOnSession", cfg.optBoolean("autoStartOnSession", true));
+            j.put("watchdog", watchdogOn.get());
+            j.put("watchdogSec", watchdogSec);
             j.put("last", lastText);
         } catch (Exception ignored) {
         }
@@ -856,6 +908,7 @@ final class AutoHoldBot {
                     emit("✅ ชาร์จเต็ม — ปิดบอทอัตโนมัติ (เปิดเซสชันใหม่จะเริ่มให้เอง)", "#27ae60", true);
                     stopFlag = true;
                     running.set(false);
+                    startWatchdog(cfg);   // รอจนต้นแบบกลับมา → เปิดบอทเองอีกครั้ง
                     break;
                 }
                 if (!running.get() || stopFlag) break;

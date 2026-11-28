@@ -138,6 +138,8 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
     <div class="bot-grid" style="width:100%">
       <label class="note" style="margin:0;white-space:nowrap"><input type="checkbox" id="botAutoStart" checked title="เปิดเซสชันในแอปแล้วให้บอทเริ่มเองทันที"> 🚀 เปิดบอทตอนเปิดเซสชัน</label>
       <label class="note" style="margin:0;white-space:nowrap"><input type="checkbox" id="botStopCharged" checked title="พอชาร์จเต็ม/ปล่อยนิ้วแล้วปิดบอททันที (เปิดเซสชันใหม่จะเริ่มให้เอง)"> ✅ ปิดบอทตอนชาร์จเต็ม</label>
+      <label class="note" style="margin:0;white-space:nowrap"><input type="checkbox" id="botWatchdog" checked title="ตอนบอทปิด: ดึงภาพตรวจหาต้นแบบซ้ำ ๆ แล้วเปิดบอทเองเมื่อเจอ"> 👁 ดูภาพตอนปิด</label>
+      <input id="botWatchSec" type="number" value="2" min="1" max="60" title="ตรวจทุกกี่วินาทีตอนบอทปิด" style="max-width:65px">
     </div>
     <div class="bot-grid">
       <button onclick="botCaptureUI()">📸 แคปจอ</button>
@@ -639,7 +641,9 @@ function botCfg() {
     holdMs: Math.round(num('botHoldMs', 1200)),
     multiScale: !$('botMulti') || $('botMulti').checked,
     autoStartOnSession: !$('botAutoStart') || $('botAutoStart').checked,
-    stopAfterCharge: !$('botStopCharged') || $('botStopCharged').checked
+    stopAfterCharge: !$('botStopCharged') || $('botStopCharged').checked,
+    watchdogEnabled: !$('botWatchdog') || $('botWatchdog').checked,
+    watchdogSec: Math.round(num('botWatchSec', 2))
   };
 }
 
@@ -830,6 +834,7 @@ async function botStatusRefresh() {
       + ' @สเกล ' + (s.bestScale != null ? Number(s.bestScale).toFixed(2) : '-')
       + ' (' + (s.bestTpl || '-') + ')'
       + ' · ปล่อย≥' + (s.releaseThreshold != null ? Number(s.releaseThreshold).toFixed(2) : '-')
+      + ' · 👁' + (s.watchdog ? (s.watchdogSec || 2) + 's' : '-')
       + ' · ต้นแบบ ' + (s.templates || 0) + '/' + (s.releaseTemplates || 0);
     const pill = $('botRunPill');
     if (pill) {
@@ -958,6 +963,8 @@ async function botLoadCfgUI() {
   if ($('botMulti')) $('botMulti').checked = c.multiScale !== false;
   if ($('botAutoStart')) $('botAutoStart').checked = c.autoStartOnSession !== false;
   if ($('botStopCharged')) $('botStopCharged').checked = c.stopAfterCharge !== false;
+  if ($('botWatchdog')) $('botWatchdog').checked = c.watchdogEnabled !== false;
+  set('botWatchSec', c.watchdogSec || 2);
   botTapModeChange();
   renderBotPoints();
   if (Object.keys(c).length) toast('โหลดตั้งค่าแล้ว');
