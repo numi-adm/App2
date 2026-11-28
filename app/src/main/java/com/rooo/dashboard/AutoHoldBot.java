@@ -313,6 +313,7 @@ final class AutoHoldBot {
             j.put("holdMs", holdMs);
             j.put("bestScale", lastBestScale);
             j.put("bestTpl", lastBestTplW + "x" + lastBestTplH);
+            j.put("releaseThreshold", optDouble(cfg, "releaseThreshold", 0.92));
             j.put("last", lastText);
         } catch (Exception ignored) {
         }
@@ -808,11 +809,13 @@ final class AutoHoldBot {
                         double thr = optDouble(cfg, "releaseThreshold", 0.92);
                         if (score >= thr) confirm++;
                         else confirm = 0;
-                        /* ฉลาดขึ้น: ภาพชาร์จเต็มชัดมาก (≥0.97) = ยืนยันทันที
-                         * ไม่ต้องรอเฟรม 2 ให้เสียเวลาชาร์จเกิน */
-                        if (score >= 0.97) confirm = confirmN;
+                        /* ภาพชาร์จเต็มชัดมาก = ยืนยันทันที (แต่ต้องไม่ต่ำกว่าที่ผู้ใช้กำหนด
+                         * เช่น ตั้ง 0.99 → 0.97 ต้องไม่ปล่อยก่อนถึงค่า) */
+                        if (score >= Math.max(0.97, thr)) confirm = confirmN;
                         emit("🔋 ชาร์จ " + String.format(java.util.Locale.US, "%.1f", elapsed)
-                                + " วิ (ยืนยัน " + confirm + "/" + confirmN + ")", "#2ecc71", false);
+                                + " วิ (เหมือน " + String.format(java.util.Locale.US, "%.2f", score)
+                                + "/" + String.format(java.util.Locale.US, "%.2f", thr)
+                                + " · ยืนยัน " + confirm + "/" + confirmN + ")", "#2ecc71", false);
                     } else {
                         boolean gone = findTarget(check) == null;
                         if (gone) confirm++;
