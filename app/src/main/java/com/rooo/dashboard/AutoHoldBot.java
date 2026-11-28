@@ -68,6 +68,7 @@ final class AutoHoldBot {
     private int sdk = 30;
     private String holdMode = "idle";
     private int pressX = 0, pressY = 0;
+    private int[] targetRect = null;
     private double lastBestScore = 0.0;   // คะแนน-template สูงสุดล่าสุด (ไว้ดีบัก)
     private long lastDiagEmit = 0L;
     private int frames = 0;
@@ -83,7 +84,8 @@ final class AutoHoldBot {
         /* โหลดต้นแบบที่เคยบันทึกไว้ในโฟลเดอร์กลับมาใช้ทันที */
         try {
             for (BotStorage.SavedTemplate st : this.storage.loadAll()) {
-                Tpl t = new Tpl(st.rgba, st.w, st.h, new int[]{0, 0, st.w, st.h}, st.name);
+                int[] b = (st.box != null && st.box.length >= 4) ? st.box : new int[]{0, 0, st.w, st.h};
+                Tpl t = new Tpl(st.rgba, st.w, st.h, b, st.name);
                 if (st.release) releaseTemplates.add(t);
                 else templates.add(t);
             }
@@ -298,7 +300,13 @@ final class AutoHoldBot {
                 }
             }
             bm.recycle();
-            return addRawTemplate(rgba, tw, th, release);
+            String savedName = storage.save(rgba, tw, th, release, new int[]{0, 0, tw, th});
+            if (savedName == null) return false;
+            Tpl t = new Tpl(rgba, tw, th, new int[]{0, 0, tw, th}, savedName);
+            if (release) releaseTemplates.add(t);
+            else templates.add(t);
+            emit("✂️ ตัดต้นแบบ" + (release ? "ปล่อย" : "กด") + " " + tw + "x" + th + " → " + savedName, "#27ae60", true);
+            return true;
         } catch (Exception e) {
             Log.w(TAG, "addTemplate: " + e.getMessage());
             return false;
@@ -344,7 +352,8 @@ final class AutoHoldBot {
         try {
             BotStorage.SavedTemplate st = storage.load(name);
             if (st == null) return false;
-            Tpl t = new Tpl(st.rgba, st.w, st.h, new int[]{0, 0, st.w, st.h}, st.name);
+            int[] b = (st.box != null && st.box.length >= 4) ? st.box : new int[]{0, 0, st.w, st.h};
+            Tpl t = new Tpl(st.rgba, st.w, st.h, b, st.name);
             if (st.release) releaseTemplates.add(t);
             else templates.add(t);
             emit("📂 โหลดต้นแบบ '" + st.name + "' แล้ว", "#27ae60", true);
@@ -497,7 +506,7 @@ final class AutoHoldBot {
                 if (score >= thr) {
                     int bx = out[0] + ox, by = out[1] + oy;
                     int[] b = t.box;
-                    if (b[2] > b[0] && b[3] > b[1]) {
+                    if (b != null && b.length >= 4 && (b[2] > b[0] || b[3] > b[1])) {
                         bestRect = new int[]{bx + b[0], by + b[1], bx + b[2], by + b[3]};
                     } else {
                         int cx = bx + t.w / 2, cy = by + t.h / 2;
@@ -579,7 +588,7 @@ final class AutoHoldBot {
                 }
 
                 int x = pickX(rect), y = pickY(rect);
-                if (!pressTouch(x, y)) {
+                if (!pressTouch(x, y, rect)) {
                     String hint = "webview".equals(controlMode)
                             ? "ตรวจสอบ WebView/การส่งทัชในแอป" : "ตรวจสอบ ADB/SDK";
                     emit("❌ กดนิ้วไม่สำเร็จ — " + hint, "#c0392b", true);
@@ -692,11 +701,12 @@ final class AutoHoldBot {
     // ------------------------------------------------------------------
     /* MuMu 12 (SDK 32): `input motionevent` เป็น native เร็ว ~20ms — ใช้ทางเดียว
      * (ตัดโหมด swipe สำหรับ Android เก่า < 10 ที่ MuMu ไม่ต้องการออก) */
-    private boolean pressTouch(int x, int y) {
+    private boolean pressTouch(int x, int y, int[] rect) {
         try {
             synchronized (holdLock) {
                 pressX = x;
                 pressY = y;
+                targetRect = rect;
                 if ("webview".equals(controlMode)) {
                     if (touchProvider == null) throw new IOException("WebView ไม่พร้อม");
                     touchProvider.down(x, y);
@@ -729,14 +739,20 @@ final class AutoHoldBot {
                 if (drifterStop.get() || !holding || !running.get()) break;
                 int dx = r > 0 ? rnd.nextInt(2 * r + 1) - r : 0;
                 int dy = r > 0 ? rnd.nextInt(2 * r + 1) - r : 0;
+                int nx = x + dx;
+                int ny = y + dy;
+                if (targetRect != null && targetRect.length >= 4) {
+                    nx = clamp(nx, targetRect[0], targetRect[2]);
+                    ny = clamp(ny, targetRect[1], targetRect[3]);
+                }
                 try {
                     synchronized (holdLock) {
                         /* เช็ค holding ในล็อกอีกครั้ง — กัน MOVE แทรกหลัง UP ไปแล้ว */
                         if (!holding) continue;
                         if ("webview".equals(controlMode)) {
-                            if (touchProvider != null) touchProvider.move(x + dx, y + dy);
+                            if (touchProvider != null) touchProvider.move(nx, ny);
                         } else if (adb != null && adb.isConnected()) {
-                            adb.shell("input motionevent MOVE " + (x + dx) + " " + (y + dy));
+                            adb.shell("input motionevent MOVE " + nx + " " + ny);
                         }
                     }
                 } catch (Exception ignored) {
@@ -848,10 +864,22 @@ final class AutoHoldBot {
         int lo = xAxis ? r[0] : r[1], hi = xAxis ? r[2] : r[3];
         double center = xAxis ? cx : cy;
         double span = Math.max(1.0, hi - lo);
-        double sigma = Math.max(1.0, span * (0.18 + 0.14 * h));
-        for (int i = 0; i < 8; i++) {
+        if (h <= 0.05 || span <= 3.0) return (int) Math.round(center);
+
+        // ดึงจุดกดให้อยู่ในโซนปลอดภัย ไม่ให้โดนขอบปุ่มหรือหลุดนอกกรอบ
+        int margin = (int) Math.floor(span * 0.20);
+        int safeLo = lo + margin;
+        int safeHi = hi - margin;
+        if (safeHi <= safeLo) {
+            safeLo = lo + (int) Math.floor(span * 0.10);
+            safeHi = hi - (int) Math.floor(span * 0.10);
+            if (safeHi < safeLo) { safeLo = (int) Math.round(center); safeHi = safeLo; }
+        }
+
+        double sigma = Math.max(1.0, span * 0.08 * h);
+        for (int i = 0; i < 10; i++) {
             int v = (int) Math.round(center + rnd.nextGaussian() * sigma);
-            if (v >= lo && v <= hi) return v;
+            if (v >= safeLo && v <= safeHi) return v;
         }
         return (int) Math.round(center);
     }

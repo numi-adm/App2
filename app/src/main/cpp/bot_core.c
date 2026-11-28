@@ -89,10 +89,10 @@ static double ncc_scan(const unsigned char *g, int gw, int gh,
 }
 
 /*
- * สแกนหา template แบบเร็ว 2 ขั้น:
- *   1) ย่อภาพ/ต้นแบบลง d เท่า แล้วหาตำแหน่งคร่าว ๆ (ถูกกว่า d^4 เท่า)
- *   2) ค้นหาละเอียดรอบตำแหน่งนั้นในภาพเต็ม
- * `step` คือระยะย่อขั้นต่ำ (ยิ่งใหญ่ยิ่งเร็ว แต่ความแม่นยำลดลงเล็กน้อย)
+ * สแกนหา template แบบแม่นยำสูง (NCC):
+ *   - ถ้า d == 1 หรือต้นแบบมีขนาดเล็ก: สแกนเต็มความละเอียด 100% ตรง ๆ แม่นยำสมบูรณ์แบบ
+ *   - ถ้า d >= 2: ทำ coarse scan (ย่อ 2 เท่าเพื่อความรวดเร็ว) แล้วทำ fine scan
+ *     รอบพิกัดหยาบด้วยรัศมีที่ครอบคลุม เพื่อให้ได้พิกัดแท้จริงที่ตรงเป๊ะ ไม่เลื่อนหลุด
  */
 double bot_match_template(const unsigned char *img, int w, int h,
                           const unsigned char *tpl, int tw, int th,
@@ -115,13 +115,10 @@ double bot_match_template(const unsigned char *img, int w, int h,
     to_gray(img, w, h, g);
     to_gray(tpl, tw, th, gt);
 
-    /* เลือกตัวย่อ: ไม่ให้ต้นแบบย่อเล็กเกินไป (ยังต้องมีความคมพอแยกแยะ) */
+    /* จำกัด d ไม่เกิน 2 เท่า เพื่อคงความคมชัดและรายละเอียดของเทมเพลต (ไม่เบลอจนจับผิดตำแหน่ง) */
     int d = step;
-    int by_width = tw / 8, by_height = th / 4;
-    if (by_width > d) d = by_width;
-    if (by_height > d) d = by_height;
-    if (d > 16) d = 16;
-    if (d < 1) d = 1;
+    if (d > 2) d = 2;
+    if (tw < 24 || th < 24) d = 1;
 
     int dw = (w + d - 1) / d, dh = (h + d - 1) / d;
     int dtw = tw / d, dth = th / d;
@@ -134,7 +131,7 @@ double bot_match_template(const unsigned char *img, int w, int h,
     int bx = 0, by = 0;
 
     if (d == 1 || dtw < 4 || dth < 3) {
-        /* ต้นแบบเล็กอยู่แล้ว — สแกนเต็มความละเอียดตรง ๆ */
+        /* สแกนเต็มความละเอียดตรง ๆ แม่นยำ 100% */
         score = ncc_scan(g, w, h, gt, tw, th, 0, w - tw, 0, h - th, &bx, &by);
     } else {
         unsigned char *dg = (unsigned char *)malloc((size_t)dw * dh);
@@ -146,8 +143,14 @@ double bot_match_template(const unsigned char *img, int w, int h,
             double coarse = ncc_scan(dg, dw, dh, dt, dtw, dth,
                                      0, dw - dtw, 0, dh - dth, &cx, &cy);
             if (coarse > 0.0) {
-                int rx0 = cx * d - d, rx1 = cx * d + d;
-                int ry0 = cy * d - d, ry1 = cy * d + d;
+                /* ขยายรัศมีค้นหาละเอียดรอบพิกัดหยาบ ±(2*d + 2) พิกเซล ป้องกันเฟสคลาดเคลื่อน */
+                int rad = d * 2 + 2;
+                int rx0 = cx * d - rad, rx1 = cx * d + rad;
+                int ry0 = cy * d - rad, ry1 = cy * d + rad;
+                if (rx0 < 0) rx0 = 0;
+                if (ry0 < 0) ry0 = 0;
+                if (rx1 > w - tw) rx1 = w - tw;
+                if (ry1 > h - th) ry1 = h - th;
                 score = ncc_scan(g, w, h, gt, tw, th,
                                  rx0, rx1, ry0, ry1, &bx, &by);
             }

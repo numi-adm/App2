@@ -37,13 +37,19 @@ final class BotStorage {
         final boolean release;
         final byte[] rgba;
         final int w, h;
+        final int[] box;
 
-        SavedTemplate(String name, boolean release, byte[] rgba, int w, int h) {
+        SavedTemplate(String name, boolean release, byte[] rgba, int w, int h, int[] box) {
             this.name = name;
             this.release = release;
             this.rgba = rgba;
             this.w = w;
             this.h = h;
+            this.box = box;
+        }
+
+        SavedTemplate(String name, boolean release, byte[] rgba, int w, int h) {
+            this(name, release, rgba, w, h, null);
         }
     }
 
@@ -95,6 +101,10 @@ final class BotStorage {
 
     /** บันทึกต้นแบบ → คืนชื่อไฟล์ (ไม่ include นามสกุล) หรือ null ถ้าไม่สำเร็จ */
     synchronized String save(byte[] rgba, int w, int h, boolean release) {
+        return save(rgba, w, h, release, null);
+    }
+
+    synchronized String save(byte[] rgba, int w, int h, boolean release, int[] box) {
         String name = "tpl_" + stamp.format(new java.util.Date()) + "_" + rnd.nextInt(1000)
                 + (release ? "_rel" : "_press");
         try {
@@ -121,6 +131,11 @@ final class BotStorage {
             j.put("release", release);
             j.put("w", w);
             j.put("h", h);
+            if (box != null && box.length >= 4) {
+                JSONArray b = new JSONArray();
+                for (int v : box) b.put(v);
+                j.put("box", b);
+            }
             j.put("created", new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new java.util.Date()));
             writeText(meta(name), j.toString());
             return name;
@@ -162,7 +177,17 @@ final class BotStorage {
                 rgba[i * 4 + 3] = (byte) ((px[i] >> 24) & 0xFF);
             }
             boolean rel = j.optBoolean("release", false);
-            return new SavedTemplate(safe(name), rel, rgba, w, h);
+            int[] box = null;
+            if (j.has("box")) {
+                try {
+                    JSONArray b = j.getJSONArray("box");
+                    if (b.length() >= 4) {
+                        box = new int[]{b.getInt(0), b.getInt(1), b.getInt(2), b.getInt(3)};
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+            return new SavedTemplate(safe(name), rel, rgba, w, h, box);
         } catch (Exception e) {
             Log.w(TAG, "load " + name + ": " + e.getMessage());
             return null;
