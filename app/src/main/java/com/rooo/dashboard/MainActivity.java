@@ -28,7 +28,6 @@ import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
-import android.webkit.WebStorage;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
@@ -122,7 +121,6 @@ public class MainActivity extends Activity {
     private boolean currentAutoFill = true;
     private boolean autoCheckMode = false;
     private boolean autoAdvanceMode = false;
-    private boolean advanceScheduled = false;
     private String noticedStatus = "";
     private String lastStatus = "";
     private String lastNote = "";
@@ -130,6 +128,7 @@ public class MainActivity extends Activity {
     private int autoRetryCount = 0;
     private int openToken = 0;
     private boolean skipScheduled = false;
+    private Runnable advanceRunnable = null;   // แทนที่ delay ได้ (กัน delay เก่าค้างบังปุ่มดึงใหม่)
 
     private final List<Integer> accountQueue = new ArrayList<>();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -163,7 +162,9 @@ public class MainActivity extends Activity {
                 return;
             }
             inspectCurrentRobloxPage();
-            mainHandler.postDelayed(this, 1500);
+            /* ห่างขึ้นจาก 1500ms → 2200ms: ลดภาระ evaluateJavascript WebView
+             * (ยังไวอยู่เพราะ onPageFinished + ปุ่มดึงเรียก inspect ทันทีอยู่แล้ว) */
+            mainHandler.postDelayed(this, 2200);
         }
     };
 
@@ -449,7 +450,7 @@ public class MainActivity extends Activity {
                     browserStatusBadge.setTextColor(Color.parseColor("#44ff77"));
                     notifyDashboard(null);
                     if (autoCheckMode || autoAdvanceMode || !accountQueue.isEmpty()) {
-                        scheduleAdvance(1200);
+                        scheduleAdvance(400);
                     }
                     return;
                 }
@@ -597,8 +598,9 @@ public class MainActivity extends Activity {
         CookieManager cm = CookieManager.getInstance();
         cm.removeAllCookies(value -> {
             cm.flush();
-            WebStorage.getInstance().deleteAllData();
-            robloxWebView.clearCache(true);
+            /* ลบ storage/cache ทุกครั้งที่สลับไอดีทำให้คิวกระตุกมาก —
+             * cookie ถูกล้างแล้วพอสำหรับแยกเซสชัน (web storage ของ roblox เดินผ่าน cookie หลัก)
+             * คง clearHistory ไว้ให้ปุ่ม back ไม่ย้อนกลับไปไอดีเก่า */
             robloxWebView.clearHistory();
             if (afterClear != null) afterClear.run();
         });
@@ -622,7 +624,7 @@ public class MainActivity extends Activity {
         currentAutoFill = autoFill;
         autoCheckMode = isCheckMode;
         autoAdvanceMode = autoAdvance;
-        advanceScheduled = false;
+        cancelScheduledAdvance();
 
         if (!accountQueue.isEmpty()) {
             int first = accountQueue.remove(0);
@@ -640,7 +642,7 @@ public class MainActivity extends Activity {
         lastNote = "";
         autoRetryCount = 0;
         skipScheduled = false;
-        advanceScheduled = false;
+        cancelScheduledAdvance();   // ยกเลิก delay เก่าของไอดีก่อนหน้า (กันข้ามไอดี/ค้าง)
         openToken++;
 
         int total = NativeBridge.getAccountCount();
@@ -728,35 +730,57 @@ public class MainActivity extends Activity {
             return;
         }
         final int idx = activeAccountIdx;
+        final int token = openToken;
         browserStatusBadge.setText("กำลังสแกนหน้าเว็บก่อนดึง cookie...");
         browserStatusBadge.setTextColor(Color.parseColor("#99ccff"));
         inspectCurrentRobloxPage();
         mainHandler.postDelayed(() -> {
-            if (!browserOpen || activeAccountIdx != idx) return;
+            if (!browserOpen || activeAccountIdx != idx || token != openToken) return;
             int got = grabCookieInternal();
-            if (got <= 0) {
-                notifyDashboard("ยังไม่มี cookie — เช็คสถานะบนแถบด้านบน");
-                return;
+            boolean ok = got > 0 && "WORK".equals(lastGrabStatus);
+            browserStatusBadge.setText(got > 0
+                    ? ("สถานะ: " + lastGrabStatus + (ok ? " — บันทึก Cookie แล้ว" : " — " + lastNote))
+                    : "ยังไม่มี cookie ในหน้าต่างนี้ — ดำเนินคิวต่อ");
+            browserStatusBadge.setTextColor(Color.parseColor(got > 0 && !ok ? "#ff8844" : "#44ff77"));
+
+            /* สำคัญ: ต่อให้หา cookie ไม่เจอ ก็ยังไปตัวถัดไปได้ (ถ้ามีคิว) —
+             * เดิม return ทิ้งตรงนี้เลยทำให้คิวค้างอยู่ไอดีเดียว */
+            boolean hasNext = !accountQueue.isEmpty() || autoAdvanceMode || autoCheckMode;
+            if (hasNext) {
+                notifyDashboard(got > 0
+                        ? (ok ? "ดึง cookie สำเร็จ — ไปไอดีถัดไป"
+                              : "บันทึก cookie แล้ว (สถานะ " + lastGrabStatus + ") — ไปไอดีถัดไป")
+                        : "ยังไม่มี cookie — ข้ามไปไอดีถัดไปในคิว");
+                scheduleAdvance(250);   // เร็วขึ้นจาก 1000ms + 500ms scan → ~250ms
+            } else {
+                notifyDashboard(got > 0
+                        ? (ok ? "ดึง cookie สำเร็จ (ไอดีเดียว — กด 'ปิด / ถัดไป' เพื่อจบ)"
+                              : "บันทึก cookie แล้ว (สถานะ " + lastGrabStatus + ")")
+                        : "ยังไม่มี cookie — เช็คสถานะบนแถบด้านบน");
             }
-            boolean ok = "WORK".equals(lastGrabStatus);
-            browserStatusBadge.setText("สถานะ: " + lastGrabStatus
-                    + (ok ? " — บันทึก Cookie แล้ว" : " — " + lastNote));
-            browserStatusBadge.setTextColor(Color.parseColor(ok ? "#44ff77" : "#ff8844"));
-            notifyDashboard(ok
-                    ? "ดึง cookie สำเร็จ — ไปไอดีถัดไป"
-                    : "บันทึก cookie แล้ว (สถานะ " + lastGrabStatus + ") — ไปไอดีถัดไป");
-            scheduleAdvance(1000);
-        }, 500);
+        }, 180);   // สแกนเร็วขึ้นจาก 500ms → 180ms
     }
 
-    /* หน่วงเวลาแล้วไปไอดีถัดไป (กันสั่งซ้ำ/ข้ามไอดี) */
+    /* หน่วงเวลาแล้วไปไอดีถัดไป (กันสั่งซ้ำ/ข้ามไอดี)
+     * ฉลาดขึ้น: ทุกครั้งที่ schedule ใหม่ จะยกเลิก delay เก่าก่อน → ไม่มีกรณี
+     * delay เก่าค้างแล้วปุ่มดึงใหม่ถูกเมิน (สาเหตุหลักของ "ดึงแล้วไม่ไปต่อ") */
     private void scheduleAdvance(int delayMs) {
-        if (!browserOpen || advanceScheduled) return;
+        if (!browserOpen) return;
         final int token = openToken;
-        advanceScheduled = true;
-        mainHandler.postDelayed(() -> {
+        if (advanceRunnable != null) mainHandler.removeCallbacks(advanceRunnable);
+        advanceRunnable = () -> {
+            advanceRunnable = null;
             if (token == openToken && browserOpen) closeAndOpenNextAccount();
-        }, delayMs);
+        };
+        mainHandler.postDelayed(advanceRunnable, delayMs);
+    }
+
+    /** ยกเลิกการเดินคิวที่หน่วงไว้ (ใช้ตอนเปิดไอดีใหม่/หยุดคิว/ลองใหม่) */
+    private void cancelScheduledAdvance() {
+        if (advanceRunnable != null) {
+            mainHandler.removeCallbacks(advanceRunnable);
+            advanceRunnable = null;
+        }
     }
 
     /* ไปไอดีถัดไปในคิว โดยไม่ดึง cookie ซ้ำ */
@@ -769,7 +793,7 @@ public class MainActivity extends Activity {
             /* บอท WebView ต้องใช้แผงนี้จับภาพ — ห้ามปิดแผงตอนคิวหมด ไม่งั้นบอทจะดึงภาพไม่ได้ */
             autoCheckMode = false;
             autoAdvanceMode = false;
-            advanceScheduled = false;
+            cancelScheduledAdvance();
             notifyDashboard("ครบทุกไอดีในคิวแล้ว — คงหน้าเว็บไว้ให้บอททำงานต่อ");
         } else {
             stopQueueAndCloseBrowser();
@@ -1011,7 +1035,7 @@ public class MainActivity extends Activity {
         autoFillPending = false;
         autoCheckMode = false;
         autoAdvanceMode = false;
-        advanceScheduled = false;
+        cancelScheduledAdvance();
         openToken++;
         mainHandler.removeCallbacks(liveInspectorRunnable);
         robloxWebView.loadUrl("about:blank");

@@ -571,13 +571,32 @@ async function manualOpen(i) {
   load();
 }
 
-/* Callback invoked from Android Java/C when cookie is captured or status updated */
+/* Callback invoked from Android Java/C when cookie is captured or status updated
+ * (inspector ยิง null ทุก 2.2 วิ — ใช้ throttle กัน load() rerender ตารางถี่เกินไป) */
+let _lastTableLoad = 0;
+let _tableLoadTimer = null;
+function loadTableThrottled() {
+  const wait = Math.max(0, 900 - (Date.now() - _lastTableLoad));
+  if (wait <= 0) {
+    _lastTableLoad = Date.now();
+    load();
+  } else if (!_tableLoadTimer) {
+    _tableLoadTimer = setTimeout(() => {
+      _tableLoadTimer = null;
+      _lastTableLoad = Date.now();
+      load();
+    }, wait);
+  }
+}
 window.onNativeCookieUpdate = function(msg) {
   if (msg) {
     $('dlog').textContent = msg;
     toast(msg);
+    _lastTableLoad = Date.now();
+    load();          // มีข้อความใหม่ = อัปเดตทันที
+  } else {
+    loadTableThrottled();  // ไม่มีข้อความ = รอได้ ไม่ต้อง rerender ทุกครั้ง
   }
-  load();
 };
 
 /* ================= Auto-Hold Bot (พอร์ตจาก FFFFFF) ================= */
