@@ -172,6 +172,7 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
       <button onclick="botStartUI()" style="background:#1d7a34">▶ START</button>
       <button class="danger" onclick="botStopUI()">⏹ STOP</button>
       <button class="ghost" onclick="botTestTapUI()">👆 ทดสอบแตะกลาง WebView</button>
+      <button class="ghost" onclick="botTestTextUI()">🔤 ทดสอบอ่านข้อความ</button>
       <span id="botLog" class="note">ยังไม่เริ่มทำงาน</span>
     </div>
     <div class="bot-grid" style="border-top:1px solid #444;padding-top:8px">
@@ -319,6 +320,10 @@ function nativeDispatch(path, data) {
     }
     if (path === '/api/bot_status') {
       return JSON.parse(window.NativeApp.botStatus() || '{}');
+    }
+    if (path === '/api/bot_test_text') {
+      if (!window.NativeApp.botTestText) return {ok: false, error: 'APK ยังเก่า — ต้อง build ใหม่ก่อนครับ'};
+      return JSON.parse(window.NativeApp.botTestText() || '{"ok":false}');
     }
     if (path === '/api/bot_capture') {
       return JSON.parse(window.NativeApp.botCapture() || '{"ok":false}');
@@ -817,6 +822,16 @@ function botTestTapUI() {
   if (!window.NativeApp.botTestTap) return toast('APK ยังเก่า — ต้อง build ใหม่ก่อนครับ');
   window.NativeApp.botTestTap(-1, -1);
   toast('ส่งทัชทดสอบแล้ว — ดูผลบนหน้าเว็บครับ');
+}
+
+async function botTestTextUI() {
+  const j = await api('/api/bot_test_text', {});
+  if (!j.ok) return toast(j.error || 'อ่านข้อความไม่สำเร็จ');
+  const t = (j.text || '').replace(/\s+/g, ' ').trim();
+  $('botLog').textContent = t
+    ? '🔤 ที่อ่านได้: ' + t.slice(0, 300) + (t.length > 300 ? '…' : '')
+    : '🔤 อ่านได้ว่าง — ถ้าเป็นข้อความใน canvas ต้องใช้ OCR';
+  toast(t ? 'อ่านข้อความแล้ว — ดูในช่อง log' : 'อ่านได้ว่าง — ถ้าเป็นข้อความใน canvas ต้องใช้ OCR');
 }
 
 async function botStartUI() {

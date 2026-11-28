@@ -163,11 +163,18 @@ public class MainActivity extends Activity {
         final CountDownLatch latch = new CountDownLatch(1);
         runOnUiThread(() -> {
             try {
+                /* สำคัญ: evaluateJavascript จะ JSON-encode ผลลัพธ์อยู่แล้ว
+                 * ถ้า return เป็น string (JSON.stringify) จะถูก quote ซ้ำ → JSONObject parse ไม่ได้
+                 * เลย return object ตรง ๆ จะได้ {"t":"..."} ที่ parse ได้ทันที */
                 robloxWebView.evaluateJavascript(
-                        "(function(){try{return JSON.stringify({t:"
-                                + "(document.body&&document.body.innerText)||"
-                                + "(document.documentElement&&document.documentElement.innerText)||''"
-                                + "});}catch(e){return JSON.stringify({t:''});}})()",
+                        "(function(){try{var p=[];"
+                                + "if(document.title)p.push(document.title);"
+                                + "var b=document.body||document.documentElement;"
+                                + "if(b)p.push(b.innerText||b.textContent||'');"
+                                + "var fs=document.querySelectorAll('iframe');"
+                                + "for(var i=0;i<fs.length;i++){try{var d=fs[i].contentDocument;"
+                                + "if(d&&d.body)p.push(d.body.innerText||d.body.textContent||'');}catch(e){}}"
+                                + "return {t:p.join('\\n')};}catch(e){return {t:''};}})()",
                         value -> {
                             try {
                                 out[0] = new JSONObject(value).optString("t", "");
@@ -1771,6 +1778,24 @@ public class MainActivity extends Activity {
         public String botTestTap(int x, int y) {
             testWebTap(x, y);
             return "{\"ok\":true}";
+        }
+
+        /** ทดสอบอ่านข้อความจาก WebView — ให้ผู้ใช้เห็นว่าบอทอ่านอะไรได้จริง */
+        @JavascriptInterface
+        public String botTestText() {
+            String t = readWebViewText();
+            String s = t == null ? "" : t.replace("\r", " ").replace("\n", " ");
+            if (s.length() > 400) s = s.substring(0, 400) + "…";
+            autoHoldBot.note("🔤 ข้อความที่อ่านได้จากหน้าเว็บ: " + (s.isEmpty() ? "(ว่าง — อาจเป็นข้อความใน canvas)" : s),
+                    "#8ecbff");
+            try {
+                JSONObject j = new JSONObject();
+                j.put("ok", true);
+                j.put("text", t == null ? "" : t);
+                return j.toString();
+            } catch (Exception e) {
+                return "{\"ok\":false}";
+            }
         }
 
         @JavascriptInterface

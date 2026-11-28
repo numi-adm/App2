@@ -95,6 +95,7 @@ final class AutoHoldBot {
     private double stickyScale = 1.0;     // สเกลที่เคย-success → ลองก่อนเสมอ (ประหยัดเวลา)
     private long scanTicks = 0;           // นับรอบสแกน เพื่อสลับระหว่างสแกนสเกลเดียว/สแกนเต็ม
     private long lastTextWarn = 0L;
+    private String lastTextSample = "";   // ตัวอย่างข้อความที่อ่านได้ล่าสุด (ไว้ดีบัก)
     private int lastBestTplW = 0, lastBestTplH = 0;   // ขนาดต้นแบบที่ให้คะแนนดีที่สุด
     private long lastDiagEmit = 0L;
     private int frames = 0;
@@ -388,6 +389,7 @@ final class AutoHoldBot {
             j.put("watchdog", watchdogOn.get());
             j.put("watchdogSec", watchdogSec);
             j.put("textNeedle", optString(cfg, "textNeedle", ""));
+            j.put("textSample", textSampleShort());
             j.put("last", lastText);
         } catch (Exception ignored) {
         }
@@ -644,6 +646,7 @@ final class AutoHoldBot {
         if (needle.trim().isEmpty()) return false;
         String text = textProvider.visibleText();
         if (text == null) return false;
+        lastTextSample = text;
         boolean cs = cfg.optBoolean("textCaseSensitive", false);
         String match = optString(cfg, "textMatch", "contains");
         try {
@@ -658,6 +661,11 @@ final class AutoHoldBot {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    private String textSampleShort() {
+        String s = lastTextSample == null ? "" : lastTextSample.replace('\n', ' ').replace('\r', ' ').trim();
+        return s.length() > 160 ? s.substring(0, 160) + "…" : s;
     }
 
     /** เจอข้อความแล้ว → ให้ลูปหลักกดที่พิกัดที่ผู้ใช้จับไว้ (rect เป็นแค่สัญญาณว่าเจอ) */
@@ -852,8 +860,9 @@ final class AutoHoldBot {
                     long now = System.currentTimeMillis();
                     if (txt) {
                         if (now - lastDiagEmit > 2000) {
-                            emit("🔤 ยังไม่เจอข้อความ '" + optString(cfg, "textNeedle", "")
-                                    + "' — รอข้อความปรากฏในหน้าเว็บ...", "#3498db", true);
+                            emit("🔤 ยังไม่เจอ '" + optString(cfg, "textNeedle", "")
+                                    + "' — ที่อ่านได้: " + (textSampleShort().isEmpty() ? "(ว่าง)" : textSampleShort()),
+                                    "#3498db", true);
                             lastDiagEmit = now;
                         }
                     } else if (!"color".equals(optString(cfg, "mode", "template")) && now - lastDiagEmit > 2000) {
