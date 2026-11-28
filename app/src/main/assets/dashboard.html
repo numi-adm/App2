@@ -108,6 +108,7 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
       <select id="botMode" style="max-width:130px">
         <option value="template">🖼 Template</option>
         <option value="color">🎨 จับสี</option>
+        <option value="text">🔤 ข้อความ</option>
       </select>
       <input id="botThr" type="number" step="0.01" min="0.5" max="0.99" value="0.80" title="ความเหมือนขั้นต่ำ (กด)">
       <span class="note" style="margin:0;white-space:nowrap">ปล่อย≥</span>
@@ -115,6 +116,16 @@ th{background:#2a2a2a;color:#bbb;font-weight:600;white-space:nowrap}
       <input id="botColor" type="color" value="#ffffff" title="สีเป้าหมาย (โหมดจับสี)">
       <input id="botTol" type="number" value="25" title="ความคลาดเคลื่อนของสี" style="max-width:70px">
       <input id="botArea" type="number" value="30" title="พื้นที่สีขั้นต่ำ (px)" style="max-width:80px">
+    </div>
+    <div class="bot-grid" style="width:100%">
+      <input id="botText" placeholder="ข้อความที่ต้องการ (เช่น Charge)" style="flex:2;min-width:180px" title="ตรวจจากข้อความในหน้าเว็บ (DOM) — ใช้โหมด 🔤 ข้อความ">
+      <select id="botTextMatch" style="max-width:120px" title="วิธีเทียบข้อความ">
+        <option value="contains">มีอยู่</option>
+        <option value="exact">ตรงเป๊ะ</option>
+        <option value="regex">Regex</option>
+      </select>
+      <label class="note" style="margin:0;white-space:nowrap"><input type="checkbox" id="botTextCase"> ตัวพิมพ์ใหญ่-เล็ก</label>
+      <span class="note" style="width:100%;color:#8ecbff">โหมดข้อความ: เจอข้อความ → กดตามพิกัดที่จับไว้ / ข้อความหาย → ปิดบอท (ต้องมีพิกัดกดก่อน)</span>
     </div>
     <div class="bot-grid">
       <input id="botRoi" placeholder="ROI x1,y1,x2,y2 (เว้นว่าง = ทั้งจอ)" style="flex:2;min-width:180px">
@@ -624,6 +635,9 @@ function botCfg() {
     controlMode: ($('botControl') && $('botControl').value) || 'webview',
     autoConnect: !$('botAuto') || $('botAuto').checked,
     mode: $('botMode').value,
+    textNeedle: (($('botText') && $('botText').value) || '').trim(),
+    textMatch: ($('botTextMatch') && $('botTextMatch').value) || 'contains',
+    textCaseSensitive: !$('botTextCase') || $('botTextCase').checked,
     tmThreshold: num('botThr', 0.8),
     colorHex: $('botColor').value || '#ffffff',
     colorTol: Math.round(num('botTol', 25)),
@@ -835,6 +849,7 @@ async function botStatusRefresh() {
       + ' (' + (s.bestTpl || '-') + ')'
       + ' · ปล่อย≥' + (s.releaseThreshold != null ? Number(s.releaseThreshold).toFixed(2) : '-')
       + ' · 👁' + (s.watchdog ? (s.watchdogSec || 2) + 's' : '-')
+      + (s.mode === 'text' ? ' · 🔤' + (s.textNeedle || '-') : '')
       + ' · ต้นแบบ ' + (s.templates || 0) + '/' + (s.releaseTemplates || 0);
     const pill = $('botRunPill');
     if (pill) {
@@ -948,6 +963,8 @@ async function botLoadCfgUI() {
   const c = j.config || {};
   const set = (id, v) => { if (v !== undefined && v !== null && $(id)) $(id).value = v; };
   set('botHost', c.host); set('botPort', c.port); set('botMode', c.mode);
+  set('botText', c.textNeedle); set('botTextMatch', c.textMatch || 'contains');
+  if ($('botTextCase')) $('botTextCase').checked = !!c.textCaseSensitive;
   set('botControl', c.controlMode || 'webview');
   if ($('botAuto')) $('botAuto').checked = c.autoConnect !== false;
   botOnModeChange(false);

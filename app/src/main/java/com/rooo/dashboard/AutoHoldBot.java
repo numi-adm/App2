@@ -13,6 +13,8 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.Locale;
+import java.util.regex.Pattern;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -44,6 +46,11 @@ final class AutoHoldBot {
         void up(int x, int y);
     }
 
+    /** อ่านข้อความที่แสดงอยู่ในหน้าเว็บ (เรียกจาก worker thread — ต้องจัดการ UI thread เอง) */
+    interface TextProvider {
+        String visibleText();
+    }
+
     private static final String TAG = "AutoHoldBot";
     private final Callback cb;
     private final BotStorage storage;
@@ -60,6 +67,7 @@ final class AutoHoldBot {
     private AdbClient adb;
     private CaptureProvider captureProvider;
     private TouchProvider touchProvider;
+    private TextProvider textProvider;
     private String controlMode = "webview";   // "webview" | "adb"
     private volatile boolean holding = false;   // นิ้วกำลังกดค้างอยู่ (กัน MOVE แทรกหลัง UP)
     private JSONObject cfg = new JSONObject();
@@ -86,6 +94,7 @@ final class AutoHoldBot {
     private double lastBestScale = 1.0;   // สเกลต้นแบบที่ให้คะแนนดีที่สุด
     private double stickyScale = 1.0;     // สเกลที่เคย-success → ลองก่อนเสมอ (ประหยัดเวลา)
     private long scanTicks = 0;           // นับรอบสแกน เพื่อสลับระหว่างสแกนสเกลเดียว/สแกนเต็ม
+    private long lastTextWarn = 0L;
     private int lastBestTplW = 0, lastBestTplH = 0;   // ขนาดต้นแบบที่ให้คะแนนดีที่สุด
     private long lastDiagEmit = 0L;
     private int frames = 0;
@@ -128,6 +137,10 @@ final class AutoHoldBot {
 
     void setTouchProvider(TouchProvider p) {
         touchProvider = p;
+    }
+
+    void setTextProvider(TextProvider p) {
+        textProvider = p;
     }
 
     /** เขียนข้อความลง log ของบอท (ให้ฝั่งแอปรายงานเหตุ เช่น แคปภาพไม่สำเร็จ) */
@@ -326,16 +339,20 @@ final class AutoHoldBot {
             if (!watchdogOn.get() || running.get()) continue;
             JSONObject c = watchdogCfg != null ? watchdogCfg : cfg;
             if (c == null) continue;
-            cfg = c;                                   // findTarget() ใช้ threshold/ROI จาก cfg
+            cfg = c;                                   // findTarget/textFound ใช้ค่าจาก cfg
             setControlMode(optString(c, "controlMode", controlMode));
-            if ("webview".equals(controlMode) && captureProvider == null) continue;
-            Frame f = capture();
-            if (f == null) continue;
-            if (findTarget(f) != null) {
-                emit("🔔 เจอภาพต้นแบบขณะปิดอยู่ — เปิดบอทอัตโนมัติ", "#27ae60", true);
-                start(c);
-                break;                                 // start() หยุด watchdog อยู่แล้ว
+            boolean txt = textMode();
+            if (txt) {
+                if (!textFound()) continue;
+            } else {
+                if ("webview".equals(controlMode) && captureProvider == null) continue;
+                Frame f = capture();
+                if (f == null || findTarget(f) == null) continue;
             }
+            emit(txt ? "🔔 ข้อความปรากฏอีกครั้ง — เปิดบอทอัตโนมัติ"
+                     : "🔔 เจอภาพต้นแบบขณะปิดอยู่ — เปิดบอทอัตโนมัติ", "#27ae60", true);
+            start(c);
+            break;                                     // start() หยุด watchdog อยู่แล้ว
         }
     }
 
@@ -370,6 +387,7 @@ final class AutoHoldBot {
             j.put("autoStartOnSession", cfg.optBoolean("autoStartOnSession", true));
             j.put("watchdog", watchdogOn.get());
             j.put("watchdogSec", watchdogSec);
+            j.put("textNeedle", optString(cfg, "textNeedle", ""));
             j.put("last", lastText);
         } catch (Exception ignored) {
         }
@@ -608,6 +626,55 @@ final class AutoHoldBot {
         return null;
     }
 
+    private boolean textMode() {
+        return "text".equals(optString(cfg, "mode", "template"));
+    }
+
+    /** อ่านข้อความในหน้าเว็บ แล้วเทียบกับคำที่ตั้งไว้ */
+    private boolean textFound() {
+        if (textProvider == null) {
+            long now = System.currentTimeMillis();
+            if (now - lastTextWarn > 5000) {
+                emit("⚠️ โหมดข้อความยังไม่พร้อม — เปิดแผง browser/game ในแอปก่อน", "#c0392b", true);
+                lastTextWarn = now;
+            }
+            return false;
+        }
+        String needle = optString(cfg, "textNeedle", "");
+        if (needle.trim().isEmpty()) return false;
+        String text = textProvider.visibleText();
+        if (text == null) return false;
+        boolean cs = cfg.optBoolean("textCaseSensitive", false);
+        String match = optString(cfg, "textMatch", "contains");
+        try {
+            if ("regex".equals(match)) {
+                int flags = cs ? 0 : (Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+                return Pattern.compile(needle, flags).matcher(text).find();
+            }
+            String hay = cs ? text : text.toLowerCase(Locale.US);
+            String key = cs ? needle : needle.toLowerCase(Locale.US);
+            if ("exact".equals(match)) return hay.trim().equals(key.trim());
+            return hay.contains(key);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** เจอข้อความแล้ว → ให้ลูปหลักกดที่พิกัดที่ผู้ใช้จับไว้ (rect เป็นแค่สัญญาณว่าเจอ) */
+    private int[] findTextTarget() {
+        if (!textFound()) return null;
+        if (!hasTapPoints()) {
+            long now = System.currentTimeMillis();
+            if (now - lastTextWarn > 5000) {
+                emit("⚠️ โหมดข้อความต้องมีพิกัดกด — กด 📍 จับพิกัด(WebV) บนแผง browser ก่อน",
+                        "#e67e22", true);
+                lastTextWarn = now;
+            }
+            return null;
+        }
+        return new int[]{0, 0, 0, 0};
+    }
+
     private int[] findTarget(Frame frame) {
         if (frame == null) return null;
         int ox = 0, oy = 0;
@@ -761,8 +828,9 @@ final class AutoHoldBot {
 
         try {
             while (running.get() && !stopFlag) {
-                Frame img = capture();
-                if (img == null) {
+                boolean txt = textMode();
+                Frame img = txt ? null : capture();
+                if (!txt && img == null) {
                     fails++;
                     boolean web = "webview".equals(controlMode);
                     String why = (web && captureProvider != null) ? captureProvider.lastError() : "";
@@ -779,10 +847,16 @@ final class AutoHoldBot {
                     continue;
                 }
                 fails = 0;
-                int[] rect = findTarget(img);
+                int[] rect = txt ? findTextTarget() : findTarget(img);
                 if (rect == null) {
                     long now = System.currentTimeMillis();
-                    if (!"color".equals(optString(cfg, "mode", "template")) && now - lastDiagEmit > 2000) {
+                    if (txt) {
+                        if (now - lastDiagEmit > 2000) {
+                            emit("🔤 ยังไม่เจอข้อความ '" + optString(cfg, "textNeedle", "")
+                                    + "' — รอข้อความปรากฏในหน้าเว็บ...", "#3498db", true);
+                            lastDiagEmit = now;
+                        }
+                    } else if (!"color".equals(optString(cfg, "mode", "template")) && now - lastDiagEmit > 2000) {
                         double thr = optDouble(cfg, "tmThreshold", 0.8);
                         emit("🔍 สแกน... คะแนน " + String.format(java.util.Locale.US, "%.2f", lastBestScore)
                                 + " / ต้องการ " + String.format(java.util.Locale.US, "%.2f", thr)
@@ -803,7 +877,8 @@ final class AutoHoldBot {
 
                 int x, y;
                 int[] pressRect = rect;
-                boolean useCoords = "coords".equals(tapMode) && hasTapPoints();
+                /* โหมดข้อความ: กดตามพิกัดที่จับไว้เสมอ (ข้อความเป็นแค่ตัวบอกว่าถึงเวลากด) */
+                boolean useCoords = (txt || "coords".equals(tapMode)) && hasTapPoints();
                 if (useCoords) {
                     int[] p;
                     synchronized (tapPoints) {
@@ -839,6 +914,18 @@ final class AutoHoldBot {
                     if (maxHold > 0 && elapsed > maxHold) {
                         reason = "timeout";
                         break;
+                    }
+                    if (txt) {
+                        /* โหมดข้อความ: ค้างนิ้วไปจนกว่าข้อความจะหายจากหน้าเว็บ */
+                        if (!textFound()) {
+                            emit("🔤 ข้อความหายไป — ปล่อยนิ้วและปิดบอท", "#e67e22", true);
+                            reason = "charged";
+                            break;
+                        }
+                        emit("🔋 ค้างนิ้ว " + String.format(java.util.Locale.US, "%.1f", elapsed)
+                                + " วิ — รอข้อความ '" + optString(cfg, "textNeedle", "") + "' หายไป",
+                                "#2ecc71", false);
+                        continue;
                     }
                     if (useCoords && releaseTemplates.isEmpty()) {
                         /* โหมดพิกัด: จุดกดไม่ได้อยู่บนต้นแบบ → ใช้เวลากดค้างแทนเช็คภาพหาย */
@@ -886,7 +973,8 @@ final class AutoHoldBot {
                 if ("charged".equals(reason)) {
                     int rd = reactMin + rnd.nextInt(Math.max(1, reactMax - reactMin + 1));
                     if (rnd.nextDouble() < slowChance) rd = (int) (rd * (1.5 + rnd.nextDouble() * 0.7));
-                    emit("⚡ ชาร์จเต็ม! รอ reaction " + rd + " ms ก่อนปล่อย...", "#e67e22", false);
+                    emit((txt ? "🔤 ข้อความหาย — รอ reaction " : "⚡ ชาร์จเต็ม! รอ reaction ")
+                            + rd + " ms ก่อนปล่อย...", "#e67e22", false);
                     sleep(rd);
                 } else if ("timeout".equals(reason)) {
                     if (useCoords && releaseTemplates.isEmpty()) {
@@ -902,13 +990,16 @@ final class AutoHoldBot {
                 presses++;
                 /* ชาร์จเต็ม (หรือกดตามพิกัดครบตาม ms ที่กำหนด) → ปิดบอททันที
                  * เวลาเปิดเซสชันใหม่ MainActivity จะเริ่มบอทให้เองอีกครั้ง */
-                boolean finished = "charged".equals(reason)
+                /* โหมดข้อความ: ทุกครั้งที่ปล่อยนิ้ว (ข้อความหาย) ปิดบอททันทีเสมอ */
+                boolean finished = txt || "charged".equals(reason)
                         || (useCoords && releaseTemplates.isEmpty() && "timeout".equals(reason));
-                if (finished && stopAfterCharge) {
-                    emit("✅ ชาร์จเต็ม — ปิดบอทอัตโนมัติ (เปิดเซสชันใหม่จะเริ่มให้เอง)", "#27ae60", true);
+                if (finished && (txt || stopAfterCharge)) {
+                    emit((txt ? "✅ ข้อความหาย — ปิดบอทอัตโนมัติ"
+                              : "✅ ชาร์จเต็ม — ปิดบอทอัตโนมัติ")
+                            + " (เปิดเซสชันใหม่จะเริ่มให้เอง)", "#27ae60", true);
                     stopFlag = true;
                     running.set(false);
-                    startWatchdog(cfg);   // รอจนต้นแบบกลับมา → เปิดบอทเองอีกครั้ง
+                    startWatchdog(cfg);   // รอจนข้อความ/ต้นแบบกลับมา → เปิดบอทเองอีกครั้ง
                     break;
                 }
                 if (!running.get() || stopFlag) break;

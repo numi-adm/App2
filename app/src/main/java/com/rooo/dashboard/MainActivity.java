@@ -155,6 +155,39 @@ public class MainActivity extends Activity {
         @Override public void up(int x, int y) { postWebTouch(MotionEvent.ACTION_UP, x, y, webTouchDownTime); }
     };
 
+    /** อ่านข้อความที่แสดงอยู่ในหน้าเว็บ (DOM) — ใช้กับโหมดบอท "ข้อความ" */
+    private final AutoHoldBot.TextProvider webTextProvider = () -> readWebViewText();
+
+    private String readWebViewText() {
+        final String[] out = {""};
+        final CountDownLatch latch = new CountDownLatch(1);
+        runOnUiThread(() -> {
+            try {
+                robloxWebView.evaluateJavascript(
+                        "(function(){try{return JSON.stringify({t:"
+                                + "(document.body&&document.body.innerText)||"
+                                + "(document.documentElement&&document.documentElement.innerText)||''"
+                                + "});}catch(e){return JSON.stringify({t:''});}})()",
+                        value -> {
+                            try {
+                                out[0] = new JSONObject(value).optString("t", "");
+                            } catch (Exception ignored) {
+                            }
+                            latch.countDown();
+                        });
+            } catch (Exception e) {
+                latch.countDown();
+            }
+        });
+        try {
+            if (!latch.await(900, TimeUnit.MILLISECONDS)) return "";
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return "";
+        }
+        return out[0];
+    }
+
     private final Runnable liveInspectorRunnable = new Runnable() {
         @Override
         public void run() {
@@ -183,6 +216,7 @@ public class MainActivity extends Activity {
         autoHoldBot = new AutoHoldBot((text, color, force) -> notifyBot(text, color, force), botStorage);
         autoHoldBot.setCaptureProvider(webCaptureProvider);
         autoHoldBot.setTouchProvider(webTouchProvider);
+        autoHoldBot.setTextProvider(webTextProvider);
         try {
             android.content.pm.PackageInfo pi = getPackageManager()
                     .getPackageInfo(getPackageName(), 0);
